@@ -5,6 +5,63 @@
 
 import os
 import sys
+import logging
+from typing import Optional
+
+# ロギング設定
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# 定数定義
+AUDIO_BITRATE_KBPS = 128  # 想定音声ビットレート (kbps)
+BYTES_PER_SECOND = AUDIO_BITRATE_KBPS * 1024 // 8  # 約16KB/秒
+DOWNLOAD_TIMEOUT_SECONDS = 3600  # ダウンロードタイムアウト (1時間)
+THREAD_WAIT_TIMEOUT_MS = 5000  # スレッド待機タイムアウト (5秒)
+
+
+def format_eta(seconds: Optional[int]) -> str:
+    """推定残り時間を日本語形式でフォーマット"""
+    if not seconds or seconds <= 0:
+        return ""
+    if seconds >= 3600:
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        return f"残り約{h}時間{m}分"
+    elif seconds >= 60:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"残り約{m}分{s}秒"
+    else:
+        return f"残り約{int(seconds)}秒"
+
+
+def format_duration(seconds: int) -> str:
+    """再生時間を日本語形式でフォーマット"""
+    if not seconds or seconds <= 0:
+        return ""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    if h > 0:
+        return f"{h}時間{m}分{s}秒"
+    else:
+        return f"{m}分{s}秒"
+
+
+def format_file_size(bytes_size: int) -> str:
+    """ファイルサイズを見やすい形式でフォーマット"""
+    if bytes_size >= 1024 * 1024 * 1024:
+        return f"{bytes_size / (1024 * 1024 * 1024):.1f} GB"
+    elif bytes_size >= 1024 * 1024:
+        return f"{bytes_size / (1024 * 1024):.1f} MB"
+    elif bytes_size >= 1024:
+        return f"{bytes_size / 1024:.1f} KB"
+    else:
+        return f"{bytes_size} B"
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QLabel, QPushButton, QLineEdit, QTextEdit, QComboBox, QCheckBox,
@@ -147,36 +204,65 @@ class SpacesDownloadWorker(QThread):
         self.output_dir = output_dir
         self.options = options
         self._cancel_flag = False
-        self._ydl_process = None
+        self._subprocess_pid: Optional[int] = None  # 子プロセスのPID
         self._download_start_time = None
         self._duration = 0  # 再生時間（秒）
+        self._ydl = None  # yt-dlpインスタンス
 
     def cancel(self):
+        """キャンセルフラグを設定"""
+        logger.info("Download cancellation requested")
         self._cancel_flag = True
 
     def force_stop(self):
-        """強制停止（プロセスも終了）"""
+        """強制停止（自プロセスのみ終了）"""
+        logger.info("Force stop requested")
         self._cancel_flag = True
-        # FFmpegなどの子プロセスを終了
-        import subprocess
+
+        # 特定の子プロセスのみ終了（全FFmpegを殺さない）
+        if self._subprocess_pid:
+            try:
+                import subprocess
+                if sys.platform == 'win32':
+                    # 特定のPIDのプロセスツリーを終了
+                    subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(self._subprocess_pid)],
+                        capture_output=True,
+                        creationflags=subprocess.CREATE_NO_WINDOW
+                    )
+                    logger.info(f"Terminated subprocess PID: {self._subprocess_pid}")
+            except Exception as e:
+                logger.warning(f"Failed to terminate subprocess: {e}")
+
+    def _track_subprocess(self):
+        """子プロセスのPIDを追跡"""
         try:
-            if sys.platform == 'win32':
-                # Windowsの場合、ffmpegプロセスを探して終了
-                subprocess.run(
-                    ['taskkill', '/F', '/IM', 'ffmpeg.exe'],
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW
-                )
-        except Exception:
+            import psutil
+            current_process = psutil.Process()
+            children = current_process.children(recursive=True)
+            for child in children:
+                if 'ffmpeg' in child.name().lower():
+                    self._subprocess_pid = child.pid
+                    logger.debug(f"Tracking FFmpeg subprocess PID: {self._subprocess_pid}")
+                    break
+        except ImportError:
+            # psutilがない場合はスキップ
             pass
+        except Exception as e:
+            logger.debug(f"Could not track subprocess: {e}")
 
     def run(self):
         import yt_dlp
         import time
 
+        logger.info(f"Starting download: {self.url}")
+
         def progress_hook(d):
             if self._cancel_flag:
                 raise Exception("ダウンロードがキャンセルされました")
+
+            # 子プロセス追跡（ダウンロード中に定期的に確認）
+            self._track_subprocess()
 
             status = d.get('status', '')
             info = {'status': status}
@@ -189,8 +275,7 @@ class SpacesDownloadWorker(QThread):
 
                 # ETAが不明な場合、再生時間とビットレートから推定
                 if (not eta or eta <= 0) and self._duration > 0 and speed and speed > 0:
-                    # 音声は約128kbpsと仮定 → 1秒あたり約16KB
-                    estimated_total = self._duration * 16 * 1024
+                    estimated_total = self._duration * BYTES_PER_SECOND
                     remaining_bytes = max(0, estimated_total - downloaded)
                     eta = int(remaining_bytes / speed) if speed > 0 else 0
 
@@ -199,8 +284,7 @@ class SpacesDownloadWorker(QThread):
                 if total > 0:
                     percent = (downloaded / total * 100)
                 elif self._duration > 0:
-                    # 推定サイズから計算
-                    estimated_total = self._duration * 16 * 1024
+                    estimated_total = self._duration * BYTES_PER_SECOND
                     percent = min(99, (downloaded / estimated_total * 100))
 
                 info.update({
@@ -268,16 +352,10 @@ class SpacesDownloadWorker(QThread):
 
             self._duration = duration  # ワーカーに保存（ETA計算用）
 
-            duration_str = ""
-            if duration:
-                h, m, s = duration // 3600, (duration % 3600) // 60, duration % 60
-                if h > 0:
-                    duration_str = f"{int(h)}時間{int(m)}分{int(s)}秒"
-                else:
-                    duration_str = f"{int(m)}分{int(s)}秒"
+            duration_str = format_duration(duration) if duration else ""
 
-            # 推定ファイルサイズ（128kbps想定）
-            estimated_size_mb = (duration * 16 * 1024) / (1024 * 1024) if duration else 0
+            # 推定ファイルサイズ
+            estimated_size_mb = (duration * BYTES_PER_SECOND) / (1024 * 1024) if duration else 0
 
             # filesize_approx からも推定
             if not estimated_size_mb:
@@ -296,12 +374,15 @@ class SpacesDownloadWorker(QThread):
 
             # ステップ2: ダウンロード開始
             self.progress.emit({'status': 'starting', 'message': 'ダウンロード開始...'})
+            logger.info(f"Starting download phase for: {title}")
 
             ydl_opts = {
                 'outtmpl': os.path.join(self.output_dir, '%(title)s.%(ext)s'),
                 'progress_hooks': [progress_hook],
                 'quiet': True,
                 'no_warnings': True,
+                'socket_timeout': DOWNLOAD_TIMEOUT_SECONDS,  # タイムアウト設定
+                'retries': 3,  # リトライ回数
             }
 
             if ffmpeg_path:
@@ -325,10 +406,12 @@ class SpacesDownloadWorker(QThread):
                     base = os.path.splitext(filename)[0]
                     filename = f"{base}.{audio_format}"
 
+                logger.info(f"Download completed: {filename}")
                 self.finished.emit(filename)
 
         except yt_dlp.utils.DownloadError as e:
             error_msg = str(e)
+            logger.error(f"Download error: {error_msg}")
             if "Unsupported URL" in error_msg:
                 self.error.emit("このURLはサポートされていません。\nスペースの直接URLを試してください。")
             elif "Private" in error_msg or "protected" in error_msg.lower():
@@ -338,7 +421,11 @@ class SpacesDownloadWorker(QThread):
             else:
                 self.error.emit(f"ダウンロードエラー: {error_msg}")
         except Exception as e:
+            logger.error(f"Unexpected error: {e}")
             self.error.emit(str(e))
+        finally:
+            # リソースクリーンアップ
+            self._subprocess_pid = None
 
 
 class SettingsDialog(QDialog):
@@ -1054,10 +1141,18 @@ class MainWindow(QMainWindow):
     def load_settings(self):
         """設定を読み込み"""
         settings = QSettings("YTDownloader", "Settings")
-        output_dir = settings.value("output_dir", os.path.expanduser("~/Downloads/YouTube"))
+        default_dir = os.path.expanduser("~/Downloads/YouTube")
+
+        # YouTube用保存先
+        output_dir = settings.value("output_dir", default_dir)
         self.save_dir_edit.setText(output_dir)
-        self.spaces_save_dir_edit.setText(output_dir)
         self.downloader.output_dir = output_dir
+
+        # Xスペース用保存先（独立して保存可能）
+        spaces_output_dir = settings.value("spaces_output_dir", output_dir)
+        self.spaces_save_dir_edit.setText(spaces_output_dir)
+
+        logger.debug(f"Settings loaded - output_dir: {output_dir}, spaces_dir: {spaces_output_dir}")
 
     def browse_save_dir(self):
         """保存先を選択"""
@@ -1137,14 +1232,21 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.StandardButton.Yes:
+            logger.info("Force stop initiated by user")
             self.spaces_status_label.setText("強制停止中...")
             self.spaces_log.append("\n強制停止を実行中...")
 
-            # ワーカーを強制停止
+            # ワーカーを強制停止（terminate()は使わず、フラグとプロセス終了で対応）
             if hasattr(self, 'spaces_worker') and self.spaces_worker:
                 self.spaces_worker.force_stop()
-                self.spaces_worker.terminate()
-                self.spaces_worker.wait(3000)  # 最大3秒待機
+                # terminate()ではなくwait()でスレッド終了を待つ
+                # キャンセルフラグにより例外が発生してスレッドが終了する
+                if not self.spaces_worker.wait(THREAD_WAIT_TIMEOUT_MS):
+                    logger.warning("Worker thread did not terminate in time")
+                    self.spaces_log.append("警告: スレッドの終了に時間がかかっています")
+
+            # ワーカー参照をクリア
+            self._cleanup_spaces_worker()
 
             # 一時ファイルを削除
             output_dir = self.spaces_save_dir_edit.text() or os.path.expanduser("~/Downloads/YouTube")
@@ -1161,6 +1263,28 @@ class MainWindow(QMainWindow):
             if deleted > 0:
                 self.spaces_log.append(f"一時ファイル {deleted}件 を削除しました")
             self.spaces_log.append("強制停止完了")
+            logger.info("Force stop completed")
+
+    def _cleanup_spaces_worker(self):
+        """ワーカー参照をクリーンアップ"""
+        if hasattr(self, 'spaces_worker') and self.spaces_worker:
+            try:
+                self.spaces_worker.progress.disconnect()
+                self.spaces_worker.finished.disconnect()
+                self.spaces_worker.error.disconnect()
+            except (TypeError, RuntimeError):
+                # 既に切断されている場合は無視
+                pass
+            self.spaces_worker = None
+            logger.debug("Spaces worker cleaned up")
+
+    def _save_spaces_settings(self):
+        """Xスペースの設定を保存"""
+        settings = QSettings("YTDownloader", "Settings")
+        spaces_dir = self.spaces_save_dir_edit.text()
+        if spaces_dir:
+            settings.setValue("spaces_output_dir", spaces_dir)
+            logger.debug(f"Spaces output dir saved: {spaces_dir}")
 
     def cleanup_part_files(self):
         """一時ファイル(.part)を削除"""
@@ -1212,21 +1336,6 @@ class MainWindow(QMainWindow):
         status = info.get('status', '')
         message = info.get('message', '')
 
-        # ETA表示用フォーマット
-        def format_eta(seconds):
-            if not seconds or seconds <= 0:
-                return ""
-            if seconds >= 3600:
-                h = int(seconds // 3600)
-                m = int((seconds % 3600) // 60)
-                return f"残り約{h}時間{m}分"
-            elif seconds >= 60:
-                m = int(seconds // 60)
-                s = int(seconds % 60)
-                return f"残り約{m}分{s}秒"
-            else:
-                return f"残り約{int(seconds)}秒"
-
         if status == 'extracting':
             # 情報取得中
             self.spaces_progress.setRange(0, 0)  # 不確定モード
@@ -1245,13 +1354,7 @@ class MainWindow(QMainWindow):
             if title:
                 self.spaces_log.append(f"タイトル: {title}")
             if duration:
-                h = int(duration // 3600)
-                m = int((duration % 3600) // 60)
-                s = int(duration % 60)
-                if h > 0:
-                    self.spaces_log.append(f"再生時間: {h}時間{m}分{s}秒")
-                else:
-                    self.spaces_log.append(f"再生時間: {m}分{s}秒")
+                self.spaces_log.append(f"再生時間: {format_duration(duration)}")
             elif duration_unknown:
                 self.spaces_log.append("再生時間: 取得できませんでした（推定時間は表示されません）")
 
@@ -1302,6 +1405,14 @@ class MainWindow(QMainWindow):
 
     def on_spaces_finished(self, filepath):
         """Xスペースダウンロード完了"""
+        logger.info(f"Spaces download finished: {filepath}")
+
+        # ワーカー参照をクリア
+        self._cleanup_spaces_worker()
+
+        # 保存先設定を保存
+        self._save_spaces_settings()
+
         self.spaces_download_btn.setEnabled(True)
         self.spaces_cancel_btn.setEnabled(False)
         self.spaces_force_stop_btn.setEnabled(False)
@@ -1324,6 +1435,11 @@ class MainWindow(QMainWindow):
 
     def on_spaces_error(self, error_msg):
         """Xスペースダウンロードエラー"""
+        logger.error(f"Spaces download error: {error_msg}")
+
+        # ワーカー参照をクリア
+        self._cleanup_spaces_worker()
+
         self.spaces_download_btn.setEnabled(True)
         self.spaces_cancel_btn.setEnabled(False)
         self.spaces_force_stop_btn.setEnabled(False)
