@@ -192,15 +192,48 @@ class TranscribeWorker(QThread):
             self.error.emit(str(e))
 
 
+class UpdateYtDlpWorker(QThread):
+    """yt-dlp更新用ワーカースレッド"""
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)  # success, message
+
+    def run(self):
+        import subprocess
+        try:
+            self.progress.emit("yt-dlpを更新中...")
+
+            # pipでyt-dlpを更新
+            result = subprocess.run(
+                [sys.executable, '-m', 'pip', 'install', '--upgrade', 'yt-dlp'],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+
+            if result.returncode == 0:
+                # バージョン確認
+                import yt_dlp
+                # モジュールをリロード
+                import importlib
+                importlib.reload(yt_dlp)
+                version = yt_dlp.version.__version__
+                self.finished.emit(True, f"yt-dlpを更新しました (v{version})")
+            else:
+                self.finished.emit(False, f"更新に失敗しました:\n{result.stderr}")
+        except Exception as e:
+            self.finished.emit(False, f"更新エラー: {str(e)}")
+
+
 class SpacesDownloadWorker(QThread):
-    """Xスペースダウンロード用ワーカースレッド"""
+    """Xスペースダウンロード用ワーカースレッド（複数URL対応）"""
     progress = pyqtSignal(dict)
-    finished = pyqtSignal(str)
+    item_progress = pyqtSignal(int, int, str)  # current_index, total, url
+    finished = pyqtSignal(list)  # 結果リスト
     error = pyqtSignal(str)
 
-    def __init__(self, url: str, output_dir: str, options: dict):
+    def __init__(self, urls: list, output_dir: str, options: dict):
         super().__init__()
-        self.url = url
+        self.urls = urls  # URLリスト
         self.output_dir = output_dir
         self.options = options
         self._cancel_flag = False
@@ -208,6 +241,8 @@ class SpacesDownloadWorker(QThread):
         self._download_start_time = None
         self._duration = 0  # 再生時間（秒）
         self._ydl = None  # yt-dlpインスタンス
+        self._current_index = 0
+        self._total_urls = len(urls)
 
     def cancel(self):
         """キャンセルフラグを設定"""
@@ -253,9 +288,10 @@ class SpacesDownloadWorker(QThread):
 
     def run(self):
         import yt_dlp
-        import time
 
-        logger.info(f"Starting download: {self.url}")
+        logger.info(f"Starting download for {self._total_urls} URLs")
+
+        results = []  # ダウンロード結果リスト
 
         def progress_hook(d):
             if self._cancel_flag:
@@ -308,120 +344,138 @@ class SpacesDownloadWorker(QThread):
             from src.downloader import get_ffmpeg_path
             ffmpeg_path = get_ffmpeg_path()
 
-            # ステップ1: 情報取得（ダウンロードなし）
-            self.progress.emit({'status': 'extracting', 'message': 'スペース情報を取得中...'})
+            # 各URLを順番に処理
+            for idx, url in enumerate(self.urls):
+                if self._cancel_flag:
+                    break
 
-            extract_opts = {
-                'quiet': True,
-                'no_warnings': True,
-            }
-            if ffmpeg_path:
-                extract_opts['ffmpeg_location'] = ffmpeg_path
+                self._current_index = idx + 1
+                self.item_progress.emit(self._current_index, self._total_urls, url)
 
-            with yt_dlp.YoutubeDL(extract_opts) as ydl:
-                info = ydl.extract_info(self.url, download=False)
+                logger.info(f"Processing URL {self._current_index}/{self._total_urls}: {url}")
 
-            if not info:
-                self.error.emit("スペース情報を取得できませんでした")
-                return
+                try:
+                    # ステップ1: 情報取得（ダウンロードなし）
+                    self.progress.emit({
+                        'status': 'extracting',
+                        'message': f'[{self._current_index}/{self._total_urls}] スペース情報を取得中...'
+                    })
 
-            # タイトルと再生時間を取得
-            title = info.get('title', 'Unknown')
+                    extract_opts = {
+                        'quiet': True,
+                        'no_warnings': True,
+                    }
+                    if ffmpeg_path:
+                        extract_opts['ffmpeg_location'] = ffmpeg_path
 
-            # 再生時間を複数のフィールドから取得を試みる
-            duration = info.get('duration', 0)
-            if not duration:
-                # formats から duration を取得
-                formats = info.get('formats', [])
-                for fmt in formats:
-                    if fmt.get('duration'):
-                        duration = fmt.get('duration')
-                        break
-            if not duration:
-                # requested_formats から取得
-                req_formats = info.get('requested_formats', [])
-                for fmt in req_formats:
-                    if fmt.get('duration'):
-                        duration = fmt.get('duration')
-                        break
-            if not duration:
-                # fragments から推定
-                fragments = info.get('fragments', [])
-                if fragments:
-                    duration = sum(f.get('duration', 0) for f in fragments if f.get('duration'))
+                    with yt_dlp.YoutubeDL(extract_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
 
-            self._duration = duration  # ワーカーに保存（ETA計算用）
+                    if not info:
+                        results.append(f"ERROR: {url} - 情報を取得できませんでした")
+                        continue
 
-            duration_str = format_duration(duration) if duration else ""
+                    # タイトルと再生時間を取得
+                    title = info.get('title', 'Unknown')
 
-            # 推定ファイルサイズ
-            estimated_size_mb = (duration * BYTES_PER_SECOND) / (1024 * 1024) if duration else 0
+                    # 再生時間を複数のフィールドから取得を試みる
+                    duration = info.get('duration', 0)
+                    if not duration:
+                        formats = info.get('formats', [])
+                        for fmt in formats:
+                            if fmt.get('duration'):
+                                duration = fmt.get('duration')
+                                break
+                    if not duration:
+                        req_formats = info.get('requested_formats', [])
+                        for fmt in req_formats:
+                            if fmt.get('duration'):
+                                duration = fmt.get('duration')
+                                break
+                    if not duration:
+                        fragments = info.get('fragments', [])
+                        if fragments:
+                            duration = sum(f.get('duration', 0) for f in fragments if f.get('duration'))
 
-            # filesize_approx からも推定
-            if not estimated_size_mb:
-                filesize = info.get('filesize') or info.get('filesize_approx', 0)
-                if filesize:
-                    estimated_size_mb = filesize / (1024 * 1024)
+                    self._duration = duration
 
-            self.progress.emit({
-                'status': 'info_ready',
-                'message': f'取得完了: {title}' + (f' ({duration_str})' if duration_str else ''),
-                'title': title,
-                'duration': duration,
-                'estimated_size_mb': estimated_size_mb,
-                'duration_unknown': not bool(duration)
-            })
+                    duration_str = format_duration(duration) if duration else ""
+                    estimated_size_mb = (duration * BYTES_PER_SECOND) / (1024 * 1024) if duration else 0
 
-            # ステップ2: ダウンロード開始
-            self.progress.emit({'status': 'starting', 'message': 'ダウンロード開始...'})
-            logger.info(f"Starting download phase for: {title}")
+                    if not estimated_size_mb:
+                        filesize = info.get('filesize') or info.get('filesize_approx', 0)
+                        if filesize:
+                            estimated_size_mb = filesize / (1024 * 1024)
 
-            ydl_opts = {
-                'outtmpl': os.path.join(self.output_dir, '%(title)s.%(ext)s'),
-                'progress_hooks': [progress_hook],
-                'quiet': True,
-                'no_warnings': True,
-                'socket_timeout': DOWNLOAD_TIMEOUT_SECONDS,  # タイムアウト設定
-                'retries': 3,  # リトライ回数
-            }
+                    self.progress.emit({
+                        'status': 'info_ready',
+                        'message': f'[{self._current_index}/{self._total_urls}] 取得完了: {title}' + (f' ({duration_str})' if duration_str else ''),
+                        'title': title,
+                        'duration': duration,
+                        'estimated_size_mb': estimated_size_mb,
+                        'duration_unknown': not bool(duration)
+                    })
 
-            if ffmpeg_path:
-                ydl_opts['ffmpeg_location'] = ffmpeg_path
+                    # ステップ2: ダウンロード開始
+                    self.progress.emit({
+                        'status': 'starting',
+                        'message': f'[{self._current_index}/{self._total_urls}] ダウンロード開始...'
+                    })
+                    logger.info(f"Starting download phase for: {title}")
 
-            # 音声フォーマット設定
-            audio_format = self.options.get('audio_format', 'mp3')
-            if audio_format != 'original':
-                ydl_opts['postprocessors'] = [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': audio_format,
-                    'preferredquality': '320',
-                }]
+                    ydl_opts = {
+                        'outtmpl': os.path.join(self.output_dir, '%(title)s.%(ext)s'),
+                        'progress_hooks': [progress_hook],
+                        'quiet': True,
+                        'no_warnings': True,
+                        'socket_timeout': DOWNLOAD_TIMEOUT_SECONDS,
+                        'retries': 3,
+                    }
 
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([self.url])
+                    if ffmpeg_path:
+                        ydl_opts['ffmpeg_location'] = ffmpeg_path
 
-                # ファイル名を生成
-                filename = ydl.prepare_filename(info)
-                if audio_format != 'original':
-                    base = os.path.splitext(filename)[0]
-                    filename = f"{base}.{audio_format}"
+                    # 音声フォーマット設定
+                    audio_format = self.options.get('audio_format', 'mp3')
+                    if audio_format != 'original':
+                        ydl_opts['postprocessors'] = [{
+                            'key': 'FFmpegExtractAudio',
+                            'preferredcodec': audio_format,
+                            'preferredquality': '320',
+                        }]
 
-                logger.info(f"Download completed: {filename}")
-                self.finished.emit(filename)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.download([url])
 
-        except yt_dlp.utils.DownloadError as e:
-            error_msg = str(e)
-            logger.error(f"Download error: {error_msg}")
-            if "Unsupported URL" in error_msg:
-                self.error.emit("このURLはサポートされていません。\nスペースの直接URLを試してください。")
-            elif "Private" in error_msg or "protected" in error_msg.lower():
-                self.error.emit("このスペースは非公開です。")
-            elif "not available" in error_msg.lower():
-                self.error.emit("このスペースは利用できません。\n録音が残っていない可能性があります。")
-            else:
-                self.error.emit(f"ダウンロードエラー: {error_msg}")
+                        # ファイル名を生成
+                        filename = ydl.prepare_filename(info)
+                        if audio_format != 'original':
+                            base = os.path.splitext(filename)[0]
+                            filename = f"{base}.{audio_format}"
+
+                        logger.info(f"Download completed: {filename}")
+                        results.append(filename)
+
+                except yt_dlp.utils.DownloadError as e:
+                    error_msg = str(e)
+                    logger.error(f"Download error for {url}: {error_msg}")
+                    if "Unsupported URL" in error_msg:
+                        results.append(f"ERROR: {url} - このURLはサポートされていません")
+                    elif "Private" in error_msg or "protected" in error_msg.lower():
+                        results.append(f"ERROR: {url} - このスペースは非公開です")
+                    elif "not available" in error_msg.lower():
+                        results.append(f"ERROR: {url} - このスペースは利用できません")
+                    else:
+                        results.append(f"ERROR: {url} - {error_msg}")
+                except Exception as e:
+                    logger.error(f"Unexpected error for {url}: {e}")
+                    results.append(f"ERROR: {url} - {str(e)}")
+
+            # 全件処理完了
+            self.finished.emit(results)
+
         except Exception as e:
-            logger.error(f"Unexpected error: {e}")
+            logger.error(f"Critical error: {e}")
             self.error.emit(str(e))
         finally:
             # リソースクリーンアップ
@@ -600,6 +654,12 @@ class MainWindow(QMainWindow):
         # ヘルプメニュー
         help_menu = menubar.addMenu("ヘルプ")
 
+        update_ytdlp_action = QAction("yt-dlpを更新", self)
+        update_ytdlp_action.triggered.connect(self.update_ytdlp)
+        help_menu.addAction(update_ytdlp_action)
+
+        help_menu.addSeparator()
+
         about_action = QAction("このアプリについて", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
@@ -707,7 +767,7 @@ class MainWindow(QMainWindow):
         # ログ表示
         self.download_log = QTextEdit()
         self.download_log.setReadOnly(True)
-        self.download_log.setMaximumHeight(100)
+        self.download_log.setMaximumHeight(150)
         layout.addWidget(self.download_log)
 
         layout.addStretch()
@@ -872,17 +932,20 @@ class MainWindow(QMainWindow):
         info_label.setStyleSheet("color: #666666; padding: 5px;")
         layout.addWidget(info_label)
 
-        # URL入力
-        url_group = QGroupBox("スペースURL")
+        # URL入力（複数対応）
+        url_group = QGroupBox("スペースURL（複数可）")
         url_layout = QVBoxLayout()
 
-        url_label = QLabel("XスペースのURLを入力:")
+        url_label = QLabel("XスペースのURLを入力（1行に1URL、複数入力可能）:")
         url_layout.addWidget(url_label)
 
-        self.spaces_url_input = QLineEdit()
+        self.spaces_url_input = QTextEdit()
         self.spaces_url_input.setPlaceholderText(
-            "スペースURL または スペースが埋め込まれたツイートURL"
+            "https://x.com/i/spaces/XXXXX\n"
+            "https://x.com/user/status/XXXXX\n"
+            "（1行に1URL）"
         )
+        self.spaces_url_input.setMaximumHeight(100)
         url_layout.addWidget(self.spaces_url_input)
 
         url_group.setLayout(url_layout)
@@ -931,6 +994,11 @@ class MainWindow(QMainWindow):
         # 進捗表示
         progress_group = QGroupBox("進捗")
         progress_layout = QVBoxLayout()
+
+        # 全体進捗（複数ファイル用）
+        self.spaces_overall_label = QLabel("")
+        self.spaces_overall_label.setStyleSheet("font-weight: bold;")
+        progress_layout.addWidget(self.spaces_overall_label)
 
         self.spaces_status_label = QLabel("待機中...")
         progress_layout.addWidget(self.spaces_status_label)
@@ -1168,11 +1236,15 @@ class MainWindow(QMainWindow):
             self.spaces_save_dir_edit.setText(dir_path)
 
     def start_spaces_download(self):
-        """Xスペースダウンロード開始"""
-        url = self.spaces_url_input.text().strip()
-        if not url:
+        """Xスペースダウンロード開始（複数URL対応）"""
+        text = self.spaces_url_input.toPlainText().strip()
+        if not text:
             QMessageBox.warning(self, "エラー", "スペースのURLを入力してください")
             return
+
+        # 複数URLを解析
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        urls = []
 
         # URL検証（スペースURL、ツイートURL両方対応）
         valid_patterns = [
@@ -1181,12 +1253,25 @@ class MainWindow(QMainWindow):
             'twitter.com/',
             'x.com/',
         ]
-        if not any(pattern in url for pattern in valid_patterns):
+
+        invalid_urls = []
+        for line in lines:
+            if any(pattern in line for pattern in valid_patterns):
+                urls.append(line)
+            else:
+                invalid_urls.append(line)
+
+        if not urls:
             QMessageBox.warning(self, "エラー",
                 "有効なX/TwitterのURLを入力してください\n"
                 "例: https://x.com/i/spaces/XXXXX\n"
                 "または スペースが埋め込まれたツイートURL")
             return
+
+        if invalid_urls:
+            QMessageBox.warning(self, "警告",
+                f"以下の無効なURLはスキップされます:\n{chr(10).join(invalid_urls[:5])}"
+                + (f"\n他{len(invalid_urls)-5}件" if len(invalid_urls) > 5 else ""))
 
         # 保存先設定
         output_dir = self.spaces_save_dir_edit.text() or os.path.expanduser("~/Downloads/YouTube")
@@ -1204,13 +1289,17 @@ class MainWindow(QMainWindow):
         self.spaces_cancel_btn.setEnabled(True)
         self.spaces_force_stop_btn.setEnabled(True)
         self.spaces_progress.setValue(0)
+        self.spaces_overall_label.setText(f"0/{len(urls)} 件")
         self.spaces_status_label.setText("ダウンロード準備中...")
         self.spaces_log.clear()
-        self.spaces_log.append(f"URL: {url}")
+        self.spaces_log.append(f"ダウンロード対象: {len(urls)} 件のURL")
+        for i, url in enumerate(urls, 1):
+            self.spaces_log.append(f"  [{i}] {url}")
 
-        # ワーカー開始
-        self.spaces_worker = SpacesDownloadWorker(url, output_dir, options)
+        # ワーカー開始（URLリストを渡す）
+        self.spaces_worker = SpacesDownloadWorker(urls, output_dir, options)
         self.spaces_worker.progress.connect(self.on_spaces_progress)
+        self.spaces_worker.item_progress.connect(self.on_spaces_item_progress)
         self.spaces_worker.finished.connect(self.on_spaces_finished)
         self.spaces_worker.error.connect(self.on_spaces_error)
         self.spaces_worker.start()
@@ -1270,6 +1359,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'spaces_worker') and self.spaces_worker:
             try:
                 self.spaces_worker.progress.disconnect()
+                self.spaces_worker.item_progress.disconnect()
                 self.spaces_worker.finished.disconnect()
                 self.spaces_worker.error.disconnect()
             except (TypeError, RuntimeError):
@@ -1403,9 +1493,15 @@ class MainWindow(QMainWindow):
             self.spaces_progress.setRange(0, 100)
             self.spaces_status_label.setText(message or '音声変換中...')
 
-    def on_spaces_finished(self, filepath):
-        """Xスペースダウンロード完了"""
-        logger.info(f"Spaces download finished: {filepath}")
+    def on_spaces_item_progress(self, current: int, total: int, url: str):
+        """Xスペースアイテム進捗（複数URL処理時）"""
+        self.spaces_overall_label.setText(f"{current}/{total} 件")
+        self.spaces_log.append(f"\n--- [{current}/{total}] 処理開始 ---")
+        self.spaces_log.append(f"URL: {url}")
+
+    def on_spaces_finished(self, results: list):
+        """Xスペースダウンロード完了（複数URL対応）"""
+        logger.info(f"Spaces download finished: {len(results)} items")
 
         # ワーカー参照をクリア
         self._cleanup_spaces_worker()
@@ -1418,20 +1514,47 @@ class MainWindow(QMainWindow):
         self.spaces_force_stop_btn.setEnabled(False)
         self.spaces_progress.setRange(0, 100)
         self.spaces_progress.setValue(100)
-        self.spaces_status_label.setText("完了!")
-        self.spaces_log.append(f"\n保存先: {filepath}")
 
-        # 文字起こしも実行
-        if self.spaces_transcribe_check.isChecked():
+        # 結果集計
+        success_files = [r for r in results if not r.startswith("ERROR:")]
+        error_results = [r for r in results if r.startswith("ERROR:")]
+
+        self.spaces_overall_label.setText(f"{len(results)}/{len(results)} 件 完了")
+        self.spaces_status_label.setText(f"完了! 成功: {len(success_files)}件, 失敗: {len(error_results)}件")
+
+        # ログに結果を表示
+        self.spaces_log.append(f"\n{'='*40}")
+        self.spaces_log.append(f"処理完了: {len(results)}件")
+        self.spaces_log.append(f"  成功: {len(success_files)}件")
+        self.spaces_log.append(f"  失敗: {len(error_results)}件")
+
+        if success_files:
+            self.spaces_log.append("\n【成功したファイル】")
+            for f in success_files:
+                self.spaces_log.append(f"  {f}")
+
+        if error_results:
+            self.spaces_log.append("\n【エラー】")
+            for e in error_results:
+                self.spaces_log.append(f"  {e}")
+
+        # 文字起こしも実行（最初の成功ファイルのみ）
+        if self.spaces_transcribe_check.isChecked() and success_files:
             self.spaces_log.append("\n文字起こしを開始します...")
-            # 文字起こしタブに移動して実行
-            self.transcribe_file_input.setText(filepath)
+            # 文字起こしタブに移動して実行（最初のファイル）
+            self.transcribe_file_input.setText(success_files[0])
             self.input_type_group.button(1).setChecked(True)
             self.on_input_type_changed(None)
             self.tab_widget.setCurrentIndex(3)  # 文字起こしタブ
             self.start_transcribe()
         else:
-            QMessageBox.information(self, "完了", f"ダウンロードが完了しました\n{filepath}")
+            # 結果のサマリーを表示
+            message = f"ダウンロードが完了しました\n成功: {len(success_files)}件\n失敗: {len(error_results)}件"
+            if success_files:
+                message += f"\n\n保存先:\n{success_files[0]}"
+                if len(success_files) > 1:
+                    message += f"\n他{len(success_files)-1}件"
+            QMessageBox.information(self, "完了", message)
 
     def on_spaces_error(self, error_msg):
         """Xスペースダウンロードエラー"""
@@ -1558,18 +1681,36 @@ class MainWindow(QMainWindow):
         self.download_progress.setValue(100)
         self.download_status_label.setText("完了!")
 
-        success_count = sum(1 for r in results if not r.startswith("ERROR"))
-        error_count = len(results) - success_count
+        success_files = [r for r in results if not r.startswith("ERROR")]
+        error_results = [r for r in results if r.startswith("ERROR")]
 
-        self.download_log.append(f"\n完了: {success_count}件成功, {error_count}件失敗")
+        self.download_log.append(f"\n{'='*40}")
+        self.download_log.append(f"完了: {len(success_files)}件成功, {len(error_results)}件失敗")
+
+        # 成功したファイルを表示
+        if success_files:
+            self.download_log.append("\n【成功】")
+            for f in success_files:
+                self.download_log.append(f"  {f}")
+
+        # エラー詳細を表示
+        if error_results:
+            self.download_log.append("\n【エラー】")
+            for e in error_results:
+                self.download_log.append(f"  {e}")
 
         # 文字起こしも実行
-        if self.transcribe_check.isChecked() and success_count > 0:
+        if self.transcribe_check.isChecked() and len(success_files) > 0:
             self.download_log.append("\n文字起こしを開始します...")
             # TODO: バッチ文字起こし実装
 
+        # エラーがある場合、yt-dlp更新を提案
+        if error_results:
+            if self._check_and_offer_ytdlp_update(error_results):
+                return  # 更新ダイアログを表示した場合は完了メッセージをスキップ
+
         QMessageBox.information(self, "完了",
-            f"ダウンロードが完了しました\n成功: {success_count}件\n失敗: {error_count}件")
+            f"ダウンロードが完了しました\n成功: {len(success_files)}件\n失敗: {len(error_results)}件")
 
     def on_download_error(self, error_msg):
         """ダウンロードエラー"""
@@ -1839,12 +1980,77 @@ class MainWindow(QMainWindow):
 
     def show_about(self):
         """アプリ情報を表示"""
+        import yt_dlp
+        ytdlp_version = yt_dlp.version.__version__
         QMessageBox.about(self, "YouTube Downloader",
-            "YouTube Downloader v1.0\n\n"
-            "YouTube動画のダウンロードと文字起こしツール\n"
-            "私的利用専用\n\n"
-            "使用ライブラリ:\n"
-            "- yt-dlp\n"
-            "- OpenAI Whisper\n"
-            "- PyQt6"
+            f"YouTube Downloader v1.0\n\n"
+            f"YouTube動画のダウンロードと文字起こしツール\n"
+            f"私的利用専用\n\n"
+            f"使用ライブラリ:\n"
+            f"- yt-dlp (v{ytdlp_version})\n"
+            f"- OpenAI Whisper\n"
+            f"- PyQt6"
         )
+
+    def update_ytdlp(self):
+        """yt-dlpを更新"""
+        reply = QMessageBox.question(
+            self, "yt-dlp更新",
+            "yt-dlpを最新版に更新しますか？\n\n"
+            "※ダウンロードエラーが発生する場合は更新をお試しください",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self._start_ytdlp_update()
+
+    def _start_ytdlp_update(self):
+        """yt-dlp更新を開始"""
+        self.status_bar.showMessage("yt-dlpを更新中...")
+
+        self.update_worker = UpdateYtDlpWorker()
+        self.update_worker.progress.connect(lambda msg: self.status_bar.showMessage(msg))
+        self.update_worker.finished.connect(self._on_ytdlp_update_finished)
+        self.update_worker.start()
+
+    def _on_ytdlp_update_finished(self, success: bool, message: str):
+        """yt-dlp更新完了"""
+        self.status_bar.showMessage("準備完了")
+
+        if success:
+            QMessageBox.information(self, "更新完了", message)
+            logger.info(f"yt-dlp updated: {message}")
+        else:
+            QMessageBox.warning(self, "更新失敗", message)
+            logger.error(f"yt-dlp update failed: {message}")
+
+    def _check_and_offer_ytdlp_update(self, error_results: list) -> bool:
+        """エラーにボット検出が含まれていたら更新を提案"""
+        bot_detection_keywords = [
+            "Sign in to confirm you're not a bot",
+            "bot",
+            "cookies",
+            "sign in"
+        ]
+
+        has_bot_error = any(
+            any(keyword.lower() in err.lower() for keyword in bot_detection_keywords)
+            for err in error_results
+        )
+
+        if has_bot_error:
+            reply = QMessageBox.question(
+                self, "ダウンロードエラー",
+                "YouTubeのボット検出エラーが発生しました。\n\n"
+                "yt-dlpを最新版に更新すると解決する場合があります。\n"
+                "今すぐ更新しますか？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+
+            if reply == QMessageBox.StandardButton.Yes:
+                self._start_ytdlp_update()
+                return True
+
+        return False
