@@ -135,6 +135,212 @@ class TranscribeWorker(QThread):
             self.error.emit(str(e))
 
 
+class SpacesDownloadWorker(QThread):
+    """Xスペースダウンロード用ワーカースレッド"""
+    progress = pyqtSignal(dict)
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, url: str, output_dir: str, options: dict):
+        super().__init__()
+        self.url = url
+        self.output_dir = output_dir
+        self.options = options
+        self._cancel_flag = False
+        self._ydl_process = None
+        self._download_start_time = None
+        self._duration = 0  # 再生時間（秒）
+
+    def cancel(self):
+        self._cancel_flag = True
+
+    def force_stop(self):
+        """強制停止（プロセスも終了）"""
+        self._cancel_flag = True
+        # FFmpegなどの子プロセスを終了
+        import subprocess
+        try:
+            if sys.platform == 'win32':
+                # Windowsの場合、ffmpegプロセスを探して終了
+                subprocess.run(
+                    ['taskkill', '/F', '/IM', 'ffmpeg.exe'],
+                    capture_output=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+        except Exception:
+            pass
+
+    def run(self):
+        import yt_dlp
+        import time
+
+        def progress_hook(d):
+            if self._cancel_flag:
+                raise Exception("ダウンロードがキャンセルされました")
+
+            status = d.get('status', '')
+            info = {'status': status}
+
+            if status == 'downloading':
+                downloaded = d.get('downloaded_bytes', 0)
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                speed = d.get('speed', 0)
+                eta = d.get('eta', 0)
+
+                # ETAが不明な場合、再生時間とビットレートから推定
+                if (not eta or eta <= 0) and self._duration > 0 and speed and speed > 0:
+                    # 音声は約128kbpsと仮定 → 1秒あたり約16KB
+                    estimated_total = self._duration * 16 * 1024
+                    remaining_bytes = max(0, estimated_total - downloaded)
+                    eta = int(remaining_bytes / speed) if speed > 0 else 0
+
+                # 進捗率も再計算
+                percent = 0
+                if total > 0:
+                    percent = (downloaded / total * 100)
+                elif self._duration > 0:
+                    # 推定サイズから計算
+                    estimated_total = self._duration * 16 * 1024
+                    percent = min(99, (downloaded / estimated_total * 100))
+
+                info.update({
+                    'downloaded': downloaded,
+                    'total': total,
+                    'speed': speed,
+                    'eta': eta,
+                    'percent': percent,
+                    'duration': self._duration
+                })
+            elif status == 'finished':
+                info['message'] = '音声変換中...'
+
+            self.progress.emit(info)
+
+        try:
+            if not os.path.exists(self.output_dir):
+                os.makedirs(self.output_dir)
+
+            # FFmpegパス設定
+            from src.downloader import get_ffmpeg_path
+            ffmpeg_path = get_ffmpeg_path()
+
+            # ステップ1: 情報取得（ダウンロードなし）
+            self.progress.emit({'status': 'extracting', 'message': 'スペース情報を取得中...'})
+
+            extract_opts = {
+                'quiet': True,
+                'no_warnings': True,
+            }
+            if ffmpeg_path:
+                extract_opts['ffmpeg_location'] = ffmpeg_path
+
+            with yt_dlp.YoutubeDL(extract_opts) as ydl:
+                info = ydl.extract_info(self.url, download=False)
+
+            if not info:
+                self.error.emit("スペース情報を取得できませんでした")
+                return
+
+            # タイトルと再生時間を取得
+            title = info.get('title', 'Unknown')
+
+            # 再生時間を複数のフィールドから取得を試みる
+            duration = info.get('duration', 0)
+            if not duration:
+                # formats から duration を取得
+                formats = info.get('formats', [])
+                for fmt in formats:
+                    if fmt.get('duration'):
+                        duration = fmt.get('duration')
+                        break
+            if not duration:
+                # requested_formats から取得
+                req_formats = info.get('requested_formats', [])
+                for fmt in req_formats:
+                    if fmt.get('duration'):
+                        duration = fmt.get('duration')
+                        break
+            if not duration:
+                # fragments から推定
+                fragments = info.get('fragments', [])
+                if fragments:
+                    duration = sum(f.get('duration', 0) for f in fragments if f.get('duration'))
+
+            self._duration = duration  # ワーカーに保存（ETA計算用）
+
+            duration_str = ""
+            if duration:
+                h, m, s = duration // 3600, (duration % 3600) // 60, duration % 60
+                if h > 0:
+                    duration_str = f"{int(h)}時間{int(m)}分{int(s)}秒"
+                else:
+                    duration_str = f"{int(m)}分{int(s)}秒"
+
+            # 推定ファイルサイズ（128kbps想定）
+            estimated_size_mb = (duration * 16 * 1024) / (1024 * 1024) if duration else 0
+
+            # filesize_approx からも推定
+            if not estimated_size_mb:
+                filesize = info.get('filesize') or info.get('filesize_approx', 0)
+                if filesize:
+                    estimated_size_mb = filesize / (1024 * 1024)
+
+            self.progress.emit({
+                'status': 'info_ready',
+                'message': f'取得完了: {title}' + (f' ({duration_str})' if duration_str else ''),
+                'title': title,
+                'duration': duration,
+                'estimated_size_mb': estimated_size_mb,
+                'duration_unknown': not bool(duration)
+            })
+
+            # ステップ2: ダウンロード開始
+            self.progress.emit({'status': 'starting', 'message': 'ダウンロード開始...'})
+
+            ydl_opts = {
+                'outtmpl': os.path.join(self.output_dir, '%(title)s.%(ext)s'),
+                'progress_hooks': [progress_hook],
+                'quiet': True,
+                'no_warnings': True,
+            }
+
+            if ffmpeg_path:
+                ydl_opts['ffmpeg_location'] = ffmpeg_path
+
+            # 音声フォーマット設定
+            audio_format = self.options.get('audio_format', 'mp3')
+            if audio_format != 'original':
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': audio_format,
+                    'preferredquality': '320',
+                }]
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([self.url])
+
+                # ファイル名を生成
+                filename = ydl.prepare_filename(info)
+                if audio_format != 'original':
+                    base = os.path.splitext(filename)[0]
+                    filename = f"{base}.{audio_format}"
+
+                self.finished.emit(filename)
+
+        except yt_dlp.utils.DownloadError as e:
+            error_msg = str(e)
+            if "Unsupported URL" in error_msg:
+                self.error.emit("このURLはサポートされていません。\nスペースの直接URLを試してください。")
+            elif "Private" in error_msg or "protected" in error_msg.lower():
+                self.error.emit("このスペースは非公開です。")
+            elif "not available" in error_msg.lower():
+                self.error.emit("このスペースは利用できません。\n録音が残っていない可能性があります。")
+            else:
+                self.error.emit(f"ダウンロードエラー: {error_msg}")
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class SettingsDialog(QDialog):
     """設定ダイアログ"""
 
@@ -280,6 +486,7 @@ class MainWindow(QMainWindow):
         # タブ作成
         self.setup_download_tab()
         self.setup_playlist_tab()
+        self.setup_spaces_tab()
         self.setup_transcribe_tab()
 
         # ステータスバー
@@ -564,6 +771,129 @@ class MainWindow(QMainWindow):
 
         self.tab_widget.addTab(tab, "再生リスト")
 
+    def setup_spaces_tab(self):
+        """Xスペースタブ"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # 説明
+        info_label = QLabel(
+            "X(旧Twitter)のスペース録音をダウンロードできます。\n"
+            "※ スペースURL、またはスペースが埋め込まれたツイートURLに対応\n"
+            "※ 公開スペース・録音が残っているスペースのみ"
+        )
+        info_label.setStyleSheet("color: #666666; padding: 5px;")
+        layout.addWidget(info_label)
+
+        # URL入力
+        url_group = QGroupBox("スペースURL")
+        url_layout = QVBoxLayout()
+
+        url_label = QLabel("XスペースのURLを入力:")
+        url_layout.addWidget(url_label)
+
+        self.spaces_url_input = QLineEdit()
+        self.spaces_url_input.setPlaceholderText(
+            "スペースURL または スペースが埋め込まれたツイートURL"
+        )
+        url_layout.addWidget(self.spaces_url_input)
+
+        url_group.setLayout(url_layout)
+        layout.addWidget(url_group)
+
+        # オプション
+        options_group = QGroupBox("ダウンロードオプション")
+        options_layout = QHBoxLayout()
+
+        # 音声フォーマット
+        format_layout = QVBoxLayout()
+        format_label = QLabel("音声フォーマット:")
+        self.spaces_format_combo = QComboBox()
+        style_combobox(self.spaces_format_combo)
+        self.spaces_format_combo.addItems([
+            "MP3 (推奨)",
+            "M4A (AACコーデック)",
+            "WAV (無圧縮)",
+            "オリジナル形式"
+        ])
+        format_layout.addWidget(format_label)
+        format_layout.addWidget(self.spaces_format_combo)
+        options_layout.addLayout(format_layout)
+
+        # 保存先
+        save_layout = QVBoxLayout()
+        save_label = QLabel("保存先:")
+        self.spaces_save_dir_edit = QLineEdit()
+        spaces_save_dir_btn = QPushButton("参照...")
+        spaces_save_dir_btn.clicked.connect(self.browse_spaces_save_dir)
+        save_layout.addWidget(save_label)
+        save_layout.addWidget(self.spaces_save_dir_edit)
+        save_layout.addWidget(spaces_save_dir_btn)
+        options_layout.addLayout(save_layout)
+
+        # 文字起こしオプション
+        transcribe_layout = QVBoxLayout()
+        self.spaces_transcribe_check = QCheckBox("ダウンロード後に文字起こし")
+        transcribe_layout.addWidget(self.spaces_transcribe_check)
+        transcribe_layout.addStretch()
+        options_layout.addLayout(transcribe_layout)
+
+        options_group.setLayout(options_layout)
+        layout.addWidget(options_group)
+
+        # 進捗表示
+        progress_group = QGroupBox("進捗")
+        progress_layout = QVBoxLayout()
+
+        self.spaces_status_label = QLabel("待機中...")
+        progress_layout.addWidget(self.spaces_status_label)
+
+        self.spaces_progress = QProgressBar()
+        self.spaces_progress.setMinimum(0)
+        self.spaces_progress.setMaximum(100)
+        progress_layout.addWidget(self.spaces_progress)
+
+        progress_group.setLayout(progress_layout)
+        layout.addWidget(progress_group)
+
+        # ボタン
+        button_layout = QHBoxLayout()
+        self.spaces_download_btn = QPushButton("ダウンロード開始")
+        self.spaces_download_btn.setMinimumHeight(40)
+        self.spaces_download_btn.setStyleSheet("font-weight: bold; font-size: 14px;")
+        button_layout.addWidget(self.spaces_download_btn)
+
+        self.spaces_cancel_btn = QPushButton("キャンセル")
+        self.spaces_cancel_btn.setEnabled(False)
+        button_layout.addWidget(self.spaces_cancel_btn)
+
+        self.spaces_force_stop_btn = QPushButton("強制停止")
+        self.spaces_force_stop_btn.setEnabled(False)
+        self.spaces_force_stop_btn.setStyleSheet("background-color: #d83b01;")
+        self.spaces_force_stop_btn.setToolTip("処理を強制終了し、一時ファイルを削除します")
+        button_layout.addWidget(self.spaces_force_stop_btn)
+
+        layout.addLayout(button_layout)
+
+        # ゴミファイル削除ボタン
+        cleanup_layout = QHBoxLayout()
+        self.spaces_cleanup_btn = QPushButton("一時ファイル(.part)を削除")
+        self.spaces_cleanup_btn.setStyleSheet("background-color: #666666;")
+        self.spaces_cleanup_btn.clicked.connect(self.cleanup_part_files)
+        cleanup_layout.addStretch()
+        cleanup_layout.addWidget(self.spaces_cleanup_btn)
+        layout.addLayout(cleanup_layout)
+
+        # ログ表示
+        self.spaces_log = QTextEdit()
+        self.spaces_log.setReadOnly(True)
+        self.spaces_log.setMaximumHeight(120)
+        layout.addWidget(self.spaces_log)
+
+        layout.addStretch()
+
+        self.tab_widget.addTab(tab, "Xスペース")
+
     def setup_transcribe_tab(self):
         """文字起こしタブ"""
         tab = QWidget()
@@ -716,12 +1046,17 @@ class MainWindow(QMainWindow):
         self.playlist_download_btn.clicked.connect(self.download_selected_playlist)
         self.transcribe_btn.clicked.connect(self.start_transcribe)
         self.playlist_table.cellChanged.connect(self.update_selected_count)
+        # Xスペース
+        self.spaces_download_btn.clicked.connect(self.start_spaces_download)
+        self.spaces_cancel_btn.clicked.connect(self.cancel_spaces_download)
+        self.spaces_force_stop_btn.clicked.connect(self.force_stop_spaces_download)
 
     def load_settings(self):
         """設定を読み込み"""
         settings = QSettings("YTDownloader", "Settings")
         output_dir = settings.value("output_dir", os.path.expanduser("~/Downloads/YouTube"))
         self.save_dir_edit.setText(output_dir)
+        self.spaces_save_dir_edit.setText(output_dir)
         self.downloader.output_dir = output_dir
 
     def browse_save_dir(self):
@@ -730,6 +1065,285 @@ class MainWindow(QMainWindow):
         if dir_path:
             self.save_dir_edit.setText(dir_path)
             self.downloader.output_dir = dir_path
+
+    def browse_spaces_save_dir(self):
+        """Xスペース保存先を選択"""
+        dir_path = QFileDialog.getExistingDirectory(self, "保存先を選択")
+        if dir_path:
+            self.spaces_save_dir_edit.setText(dir_path)
+
+    def start_spaces_download(self):
+        """Xスペースダウンロード開始"""
+        url = self.spaces_url_input.text().strip()
+        if not url:
+            QMessageBox.warning(self, "エラー", "スペースのURLを入力してください")
+            return
+
+        # URL検証（スペースURL、ツイートURL両方対応）
+        valid_patterns = [
+            'twitter.com/i/spaces/',
+            'x.com/i/spaces/',
+            'twitter.com/',
+            'x.com/',
+        ]
+        if not any(pattern in url for pattern in valid_patterns):
+            QMessageBox.warning(self, "エラー",
+                "有効なX/TwitterのURLを入力してください\n"
+                "例: https://x.com/i/spaces/XXXXX\n"
+                "または スペースが埋め込まれたツイートURL")
+            return
+
+        # 保存先設定
+        output_dir = self.spaces_save_dir_edit.text() or os.path.expanduser("~/Downloads/YouTube")
+
+        # フォーマット設定
+        format_map = {0: 'mp3', 1: 'm4a', 2: 'wav', 3: 'original'}
+        audio_format = format_map.get(self.spaces_format_combo.currentIndex(), 'mp3')
+
+        options = {
+            'audio_format': audio_format,
+        }
+
+        # UI更新
+        self.spaces_download_btn.setEnabled(False)
+        self.spaces_cancel_btn.setEnabled(True)
+        self.spaces_force_stop_btn.setEnabled(True)
+        self.spaces_progress.setValue(0)
+        self.spaces_status_label.setText("ダウンロード準備中...")
+        self.spaces_log.clear()
+        self.spaces_log.append(f"URL: {url}")
+
+        # ワーカー開始
+        self.spaces_worker = SpacesDownloadWorker(url, output_dir, options)
+        self.spaces_worker.progress.connect(self.on_spaces_progress)
+        self.spaces_worker.finished.connect(self.on_spaces_finished)
+        self.spaces_worker.error.connect(self.on_spaces_error)
+        self.spaces_worker.start()
+
+    def cancel_spaces_download(self):
+        """Xスペースダウンロードキャンセル"""
+        if hasattr(self, 'spaces_worker') and self.spaces_worker:
+            self.spaces_worker.cancel()
+            self.spaces_status_label.setText("キャンセル中...")
+
+    def force_stop_spaces_download(self):
+        """Xスペースダウンロード強制停止"""
+        reply = QMessageBox.question(
+            self, "強制停止",
+            "ダウンロードを強制停止し、一時ファイルを削除しますか？\n"
+            "（FFmpegプロセスも終了します）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.spaces_status_label.setText("強制停止中...")
+            self.spaces_log.append("\n強制停止を実行中...")
+
+            # ワーカーを強制停止
+            if hasattr(self, 'spaces_worker') and self.spaces_worker:
+                self.spaces_worker.force_stop()
+                self.spaces_worker.terminate()
+                self.spaces_worker.wait(3000)  # 最大3秒待機
+
+            # 一時ファイルを削除
+            output_dir = self.spaces_save_dir_edit.text() or os.path.expanduser("~/Downloads/YouTube")
+            deleted = self._delete_part_files(output_dir)
+
+            # UI更新
+            self.spaces_download_btn.setEnabled(True)
+            self.spaces_cancel_btn.setEnabled(False)
+            self.spaces_force_stop_btn.setEnabled(False)
+            self.spaces_progress.setRange(0, 100)
+            self.spaces_progress.setValue(0)
+            self.spaces_status_label.setText("強制停止完了")
+
+            if deleted > 0:
+                self.spaces_log.append(f"一時ファイル {deleted}件 を削除しました")
+            self.spaces_log.append("強制停止完了")
+
+    def cleanup_part_files(self):
+        """一時ファイル(.part)を削除"""
+        output_dir = self.spaces_save_dir_edit.text() or os.path.expanduser("~/Downloads/YouTube")
+
+        # .partファイルを検索
+        part_files = []
+        if os.path.exists(output_dir):
+            for f in os.listdir(output_dir):
+                if f.endswith('.part'):
+                    part_files.append(f)
+
+        if not part_files:
+            QMessageBox.information(self, "確認", "削除対象の一時ファイルはありません")
+            return
+
+        # 確認ダイアログ
+        file_list = "\n".join(part_files[:10])  # 最大10件表示
+        if len(part_files) > 10:
+            file_list += f"\n... 他{len(part_files) - 10}件"
+
+        reply = QMessageBox.question(
+            self, "一時ファイル削除",
+            f"以下の一時ファイルを削除しますか？\n\n{file_list}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            deleted = self._delete_part_files(output_dir)
+            QMessageBox.information(self, "完了", f"{deleted}件の一時ファイルを削除しました")
+            self.spaces_log.append(f"一時ファイル {deleted}件 を削除しました")
+
+    def _delete_part_files(self, directory: str) -> int:
+        """指定ディレクトリの.partファイルを削除"""
+        deleted = 0
+        if os.path.exists(directory):
+            for f in os.listdir(directory):
+                if f.endswith('.part'):
+                    try:
+                        os.remove(os.path.join(directory, f))
+                        deleted += 1
+                    except Exception:
+                        pass
+        return deleted
+
+    def on_spaces_progress(self, info):
+        """Xスペースダウンロード進捗"""
+        status = info.get('status', '')
+        message = info.get('message', '')
+
+        # ETA表示用フォーマット
+        def format_eta(seconds):
+            if not seconds or seconds <= 0:
+                return ""
+            if seconds >= 3600:
+                h = int(seconds // 3600)
+                m = int((seconds % 3600) // 60)
+                return f"残り約{h}時間{m}分"
+            elif seconds >= 60:
+                m = int(seconds // 60)
+                s = int(seconds % 60)
+                return f"残り約{m}分{s}秒"
+            else:
+                return f"残り約{int(seconds)}秒"
+
+        if status == 'extracting':
+            # 情報取得中
+            self.spaces_progress.setRange(0, 0)  # 不確定モード
+            self.spaces_status_label.setText(message or "スペース情報を取得中...")
+            self.spaces_log.append("スペース情報を取得中...")
+
+        elif status == 'info_ready':
+            # 情報取得完了
+            self.spaces_status_label.setText(message)
+            self.spaces_log.append(message)
+            title = info.get('title', '')
+            duration = info.get('duration', 0)
+            estimated_size = info.get('estimated_size_mb', 0)
+            duration_unknown = info.get('duration_unknown', False)
+
+            if title:
+                self.spaces_log.append(f"タイトル: {title}")
+            if duration:
+                h = int(duration // 3600)
+                m = int((duration % 3600) // 60)
+                s = int(duration % 60)
+                if h > 0:
+                    self.spaces_log.append(f"再生時間: {h}時間{m}分{s}秒")
+                else:
+                    self.spaces_log.append(f"再生時間: {m}分{s}秒")
+            elif duration_unknown:
+                self.spaces_log.append("再生時間: 取得できませんでした（推定時間は表示されません）")
+
+            if estimated_size > 0:
+                self.spaces_log.append(f"推定サイズ: 約{estimated_size:.1f} MB")
+
+        elif status == 'starting':
+            # ダウンロード開始
+            self.spaces_status_label.setText(message or "ダウンロード開始...")
+            self.spaces_log.append("ダウンロード開始...")
+
+        elif status == 'downloading':
+            percent = info.get('percent', 0)
+            total = info.get('total', 0)
+            downloaded = info.get('downloaded', 0)
+            speed = info.get('speed', 0)
+            eta = info.get('eta', 0)
+
+            # 総サイズが不明な場合は不確定モード
+            if total == 0 or percent == 0:
+                self.spaces_progress.setRange(0, 0)
+                downloaded_mb = downloaded / 1024 / 1024 if downloaded > 0 else 0
+                eta_str = format_eta(eta)
+                if downloaded_mb > 0 and eta_str:
+                    self.spaces_status_label.setText(f"ダウンロード中... {downloaded_mb:.1f} MB ({eta_str})")
+                elif downloaded_mb > 0:
+                    self.spaces_status_label.setText(f"ダウンロード中... {downloaded_mb:.1f} MB")
+                elif eta_str:
+                    self.spaces_status_label.setText(f"ダウンロード中... ({eta_str})")
+                else:
+                    self.spaces_status_label.setText("ダウンロード中...")
+            else:
+                self.spaces_progress.setRange(0, 100)
+                self.spaces_progress.setValue(int(percent))
+                speed_str = f"{speed / 1024 / 1024:.1f} MB/s" if speed else ""
+                eta_str = format_eta(eta)
+
+                parts = [f"{percent:.1f}%"]
+                if speed_str:
+                    parts.append(speed_str)
+                if eta_str:
+                    parts.append(eta_str)
+                self.spaces_status_label.setText(f"ダウンロード中... {' / '.join(parts)}")
+
+        elif status == 'finished':
+            self.spaces_progress.setRange(0, 100)
+            self.spaces_status_label.setText(message or '音声変換中...')
+
+    def on_spaces_finished(self, filepath):
+        """Xスペースダウンロード完了"""
+        self.spaces_download_btn.setEnabled(True)
+        self.spaces_cancel_btn.setEnabled(False)
+        self.spaces_force_stop_btn.setEnabled(False)
+        self.spaces_progress.setRange(0, 100)
+        self.spaces_progress.setValue(100)
+        self.spaces_status_label.setText("完了!")
+        self.spaces_log.append(f"\n保存先: {filepath}")
+
+        # 文字起こしも実行
+        if self.spaces_transcribe_check.isChecked():
+            self.spaces_log.append("\n文字起こしを開始します...")
+            # 文字起こしタブに移動して実行
+            self.transcribe_file_input.setText(filepath)
+            self.input_type_group.button(1).setChecked(True)
+            self.on_input_type_changed(None)
+            self.tab_widget.setCurrentIndex(3)  # 文字起こしタブ
+            self.start_transcribe()
+        else:
+            QMessageBox.information(self, "完了", f"ダウンロードが完了しました\n{filepath}")
+
+    def on_spaces_error(self, error_msg):
+        """Xスペースダウンロードエラー"""
+        self.spaces_download_btn.setEnabled(True)
+        self.spaces_cancel_btn.setEnabled(False)
+        self.spaces_force_stop_btn.setEnabled(False)
+        self.spaces_progress.setRange(0, 100)
+        self.spaces_progress.setValue(0)
+        self.spaces_status_label.setText("エラー発生")
+        self.spaces_log.append(f"\nエラー: {error_msg}")
+
+        # よくあるエラーの対処法を表示
+        help_text = ""
+        if "404" in error_msg or "not found" in error_msg.lower():
+            help_text = "\n\nスペースが見つかりません。以下を確認してください:\n" \
+                       "- URLが正しいか\n" \
+                       "- スペースの録音が残っているか\n" \
+                       "- スペースが公開されているか"
+        elif "private" in error_msg.lower() or "auth" in error_msg.lower():
+            help_text = "\n\nこのスペースは非公開または認証が必要です。\n" \
+                       "公開スペースのみダウンロード可能です。"
+
+        QMessageBox.critical(self, "エラー", f"ダウンロードエラー:\n{error_msg}{help_text}")
 
     def browse_transcribe_file(self):
         """文字起こし用ファイルを選択"""
