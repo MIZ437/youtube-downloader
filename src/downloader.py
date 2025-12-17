@@ -443,9 +443,13 @@ class YouTubeDownloader:
                        format_option: str = 'best',
                        audio_only: bool = False,
                        subtitle: bool = False,
+                       anti_ban: bool = True,
                        item_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]:
         """複数動画を一括ダウンロード"""
-        logger.info(f"Starting batch download: {len(urls)} URLs")
+        import time
+        import random
+
+        logger.info(f"Starting batch download: {len(urls)} URLs (anti_ban={anti_ban})")
         self.reset_cancel()
         downloaded_files = []
         total = len(urls)
@@ -454,6 +458,12 @@ class YouTubeDownloader:
             if self._is_cancelled():
                 logger.info("Batch download cancelled by user")
                 break
+
+            # BAN対策: 2件目以降は遅延を入れる
+            if anti_ban and i > 0:
+                delay = random.uniform(3.0, 5.0)  # 3〜5秒のランダム遅延
+                logger.info(f"Anti-ban delay: {delay:.1f}s")
+                time.sleep(delay)
 
             if item_callback:
                 item_callback(i + 1, total, url)

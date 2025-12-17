@@ -135,9 +135,19 @@ class SpacesDownloadWorker(QThread):
             ffmpeg_path = get_ffmpeg_path()
 
             # 各URLを順番に処理
+            import time
+            import random
+            anti_ban = self.options.get('anti_ban', True)
+
             for idx, url in enumerate(self.urls):
                 if self._cancel_flag:
                     break
+
+                # BAN対策: 2件目以降は遅延を入れる
+                if anti_ban and idx > 0:
+                    delay = random.uniform(3.0, 5.0)  # 3〜5秒のランダム遅延
+                    logger.info(f"Anti-ban delay: {delay:.1f}s")
+                    time.sleep(delay)
 
                 self._current_index = idx + 1
                 self.item_progress.emit(self._current_index, self._total_urls, url)

@@ -29,6 +29,7 @@ class DownloadWorker(QThread):
                 format_option=self.options.get('format', 'best'),
                 audio_only=self.options.get('audio_only', False),
                 subtitle=self.options.get('subtitle', False),
+                anti_ban=self.options.get('anti_ban', True),
                 item_callback=lambda i, t, u: self.item_progress.emit(i, t, u)
             )
             self.finished.emit(results)

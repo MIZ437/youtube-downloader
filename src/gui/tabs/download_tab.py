@@ -76,9 +76,13 @@ class DownloadTab(QWidget):
         self.audio_only_check = QCheckBox("音声のみ (MP3)")
         self.subtitle_check = QCheckBox("字幕をダウンロード")
         self.transcribe_check = QCheckBox("文字起こしも実行")
+        self.anti_ban_check = QCheckBox("BAN対策（遅延あり）")
+        self.anti_ban_check.setChecked(True)  # デフォルトでON
+        self.anti_ban_check.setToolTip("ダウンロード間に3〜5秒の遅延を入れてBAN対策します")
         checkbox_layout.addWidget(self.audio_only_check)
         checkbox_layout.addWidget(self.subtitle_check)
         checkbox_layout.addWidget(self.transcribe_check)
+        checkbox_layout.addWidget(self.anti_ban_check)
         options_layout.addLayout(checkbox_layout)
 
         # 保存先
@@ -184,6 +188,7 @@ class DownloadTab(QWidget):
             'format': format_map.get(self.quality_combo.currentIndex(), 'best'),
             'audio_only': self.audio_only_check.isChecked(),
             'subtitle': self.subtitle_check.isChecked(),
+            'anti_ban': self.anti_ban_check.isChecked(),
         }
 
         # UI更新

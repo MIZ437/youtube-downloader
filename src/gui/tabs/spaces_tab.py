@@ -96,12 +96,16 @@ class SpacesTab(QWidget):
         save_layout.addWidget(spaces_save_dir_btn)
         options_layout.addLayout(save_layout)
 
-        # 文字起こしオプション
-        transcribe_layout = QVBoxLayout()
+        # その他オプション
+        other_layout = QVBoxLayout()
         self.spaces_transcribe_check = QCheckBox("ダウンロード後に文字起こし")
-        transcribe_layout.addWidget(self.spaces_transcribe_check)
-        transcribe_layout.addStretch()
-        options_layout.addLayout(transcribe_layout)
+        self.spaces_anti_ban_check = QCheckBox("BAN対策（遅延あり）")
+        self.spaces_anti_ban_check.setChecked(True)  # デフォルトでON
+        self.spaces_anti_ban_check.setToolTip("ダウンロード間に3〜5秒の遅延を入れてBAN対策します")
+        other_layout.addWidget(self.spaces_transcribe_check)
+        other_layout.addWidget(self.spaces_anti_ban_check)
+        other_layout.addStretch()
+        options_layout.addLayout(other_layout)
 
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
@@ -220,6 +224,7 @@ class SpacesTab(QWidget):
 
         options = {
             'audio_format': audio_format,
+            'anti_ban': self.spaces_anti_ban_check.isChecked(),
         }
 
         # UI更新
