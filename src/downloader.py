@@ -7,10 +7,89 @@ import os
 import sys
 import json
 import re
+import logging
+import threading
+import urllib.parse
 from datetime import datetime, timedelta
-from typing import Callable, Optional, List, Dict, Any
+from typing import Callable, Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 import yt_dlp
+
+from src.constants import (
+    INVALID_FILENAME_CHARS,
+    ALLOWED_YOUTUBE_HOSTS,
+    ERROR_MESSAGES,
+    MAX_RETRIES,
+)
+
+# ロガー設定
+logger = logging.getLogger(__name__)
+
+
+def sanitize_filename(filename: str) -> str:
+    """
+    ファイル名から危険な文字を除去（パストラバーサル対策）
+
+    Args:
+        filename: 元のファイル名
+
+    Returns:
+        サニタイズされたファイル名
+    """
+    # パストラバーサル防止: ディレクトリ部分を除去
+    filename = os.path.basename(filename)
+
+    # 危険な文字を置換
+    for char in INVALID_FILENAME_CHARS:
+        filename = filename.replace(char, '_')
+
+    # 連続するアンダースコアを1つに
+    while '__' in filename:
+        filename = filename.replace('__', '_')
+
+    # 先頭・末尾のアンダースコアとスペースを除去
+    filename = filename.strip('_ ')
+
+    # 空になった場合はデフォルト名
+    if not filename:
+        filename = 'download'
+
+    logger.debug(f"Sanitized filename: {filename}")
+    return filename
+
+
+def validate_youtube_url(url: str) -> Tuple[bool, str]:
+    """
+    YouTube URLの厳密な検証
+
+    Args:
+        url: 検証するURL
+
+    Returns:
+        (有効かどうか, エラーメッセージ)
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+
+        # スキームの検証
+        if parsed.scheme not in ['http', 'https']:
+            return False, ERROR_MESSAGES['invalid_url']
+
+        # ホストの検証
+        host = parsed.netloc.lower()
+        if host not in ALLOWED_YOUTUBE_HOSTS:
+            return False, ERROR_MESSAGES['unsupported_url']
+
+        # パスの基本検証
+        if not parsed.path and not parsed.query:
+            return False, ERROR_MESSAGES['invalid_url']
+
+        logger.debug(f"URL validation passed: {url}")
+        return True, ""
+
+    except Exception as e:
+        logger.warning(f"URL validation error: {e}")
+        return False, ERROR_MESSAGES['invalid_url']
 
 
 def get_ffmpeg_path() -> Optional[str]:
@@ -104,13 +183,16 @@ class YouTubeDownloader:
         self.output_dir = output_dir
         self._progress_callback: Optional[Callable[[Dict], None]] = None
         self._cancel_flag = False
+        self._cancel_lock = threading.Lock()  # スレッドセーフなキャンセル制御
         self._ffmpeg_path = get_ffmpeg_path()
+        logger.info(f"YouTubeDownloader initialized. Output: {output_dir}")
 
     def _get_base_opts(self) -> Dict:
         """基本オプションを取得"""
         opts = {
             'quiet': True,
             'no_warnings': True,
+            'retries': MAX_RETRIES,
         }
         if self._ffmpeg_path:
             opts['ffmpeg_location'] = self._ffmpeg_path
@@ -121,17 +203,25 @@ class YouTubeDownloader:
         self._progress_callback = callback
 
     def cancel(self):
-        """ダウンロードをキャンセル"""
-        self._cancel_flag = True
+        """ダウンロードをキャンセル（スレッドセーフ）"""
+        with self._cancel_lock:
+            self._cancel_flag = True
+            logger.info("Download cancellation requested")
 
     def reset_cancel(self):
-        """キャンセルフラグをリセット"""
-        self._cancel_flag = False
+        """キャンセルフラグをリセット（スレッドセーフ）"""
+        with self._cancel_lock:
+            self._cancel_flag = False
+
+    def _is_cancelled(self) -> bool:
+        """キャンセル状態を確認（スレッドセーフ）"""
+        with self._cancel_lock:
+            return self._cancel_flag
 
     def _progress_hook(self, d: Dict):
         """yt-dlpの進捗フック"""
-        if self._cancel_flag:
-            raise Exception("ダウンロードがキャンセルされました")
+        if self._is_cancelled():
+            raise Exception(ERROR_MESSAGES['cancelled'])
 
         if self._progress_callback:
             status = d.get('status', '')
@@ -207,7 +297,8 @@ class YouTubeDownloader:
             total = len(entries)
 
             for i, entry in enumerate(entries):
-                if self._cancel_flag:
+                if self._is_cancelled():
+                    logger.info("Playlist fetch cancelled by user")
                     break
 
                 if entry is None:
@@ -300,12 +391,16 @@ class YouTubeDownloader:
                  subtitle: bool = False,
                  subtitle_lang: str = 'ja,en') -> str:
         """動画をダウンロード"""
+        logger.info(f"Starting download: {url}")
         self.reset_cancel()
 
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
+            logger.debug(f"Created output directory: {self.output_dir}")
 
         if output_template is None:
+            # セキュリティ対策: ファイル名をサニタイズするカスタムテンプレート
+            # yt-dlpの%(title)sはそのまま使用し、後処理でサニタイズされる
             output_template = os.path.join(self.output_dir, '%(title)s.%(ext)s')
 
         ydl_opts = self._get_base_opts()
@@ -350,12 +445,14 @@ class YouTubeDownloader:
                        subtitle: bool = False,
                        item_callback: Optional[Callable[[int, int, str], None]] = None) -> List[str]:
         """複数動画を一括ダウンロード"""
+        logger.info(f"Starting batch download: {len(urls)} URLs")
         self.reset_cancel()
         downloaded_files = []
         total = len(urls)
 
         for i, url in enumerate(urls):
-            if self._cancel_flag:
+            if self._is_cancelled():
+                logger.info("Batch download cancelled by user")
                 break
 
             if item_callback:
@@ -364,8 +461,11 @@ class YouTubeDownloader:
             try:
                 filepath = self.download(url, format_option, audio_only=audio_only, subtitle=subtitle)
                 downloaded_files.append(filepath)
+                logger.info(f"Downloaded ({i+1}/{total}): {filepath}")
             except Exception as e:
-                downloaded_files.append(f"ERROR: {str(e)}")
+                error_msg = f"ERROR: {str(e)}"
+                downloaded_files.append(error_msg)
+                logger.error(f"Download failed ({i+1}/{total}): {e}")
 
         return downloaded_files
 

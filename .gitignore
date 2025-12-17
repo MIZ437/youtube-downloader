@@ -45,3 +45,4 @@ config.json
 *.log
 downloads/
 .claude/
+ffmpeg/

@@ -4,8 +4,14 @@ GPU情報検出モジュール
 
 import subprocess
 import re
+import logging
 from typing import Optional, Tuple
 from dataclasses import dataclass
+
+from src.constants import WHISPER_VRAM_REQUIREMENTS
+
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -84,17 +90,24 @@ class GPUInfo:
 
 def detect_gpu() -> GPUInfo:
     """GPUを検出"""
+    logger.info("Detecting GPU...")
+
     # まずPyTorchで確認を試みる
     try:
         import torch
         if torch.cuda.is_available():
             name = torch.cuda.get_device_name(0)
             vram = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+            logger.info(f"GPU detected via PyTorch: {name} ({vram}MB)")
             return GPUInfo(available=True, name=name, vram_mb=vram)
+        else:
+            logger.debug("PyTorch CUDA not available")
     except ImportError:
-        pass
-    except Exception:
-        pass
+        logger.debug("PyTorch not installed")
+    except RuntimeError as e:
+        logger.warning(f"PyTorch CUDA runtime error: {e}")
+    except Exception as e:
+        logger.warning(f"PyTorch GPU detection error: {e}")
 
     # PyTorchが使えない場合はnvidia-smiを試す
     try:
@@ -111,11 +124,17 @@ def detect_gpu() -> GPUInfo:
                 if len(parts) >= 2:
                     name = parts[0].strip()
                     vram = int(parts[1].strip())
+                    logger.info(f"GPU detected via nvidia-smi: {name} ({vram}MB)")
                     return GPUInfo(available=True, name=name, vram_mb=vram)
-    except Exception:
-        pass
+        else:
+            logger.debug(f"nvidia-smi failed with code {result.returncode}")
+    except FileNotFoundError:
+        logger.debug("nvidia-smi not found")
+    except Exception as e:
+        logger.warning(f"nvidia-smi GPU detection error: {e}")
 
     # GPU検出失敗
+    logger.info("No GPU detected, using CPU mode")
     return GPUInfo(available=False, name="", vram_mb=0)
 
 

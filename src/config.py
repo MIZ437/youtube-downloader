@@ -5,8 +5,14 @@
 
 import os
 import json
+import logging
 from dataclasses import dataclass, asdict, field
 from typing import Optional
+
+from src.constants import ERROR_MESSAGES, MAX_RECENT_URLS
+
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,16 +69,22 @@ class ConfigManager:
                     for key, value in data.items():
                         if hasattr(self.config, key):
                             setattr(self.config, key, value)
-            except (json.JSONDecodeError, IOError):
-                pass  # 読み込みエラーの場合はデフォルト設定を使用
+                logger.info(f"Config loaded from: {self.config_path}")
+            except json.JSONDecodeError as e:
+                logger.warning(f"{ERROR_MESSAGES['config_load_error']}: JSON parse error - {e}")
+            except IOError as e:
+                logger.warning(f"{ERROR_MESSAGES['config_load_error']}: IO error - {e}")
+        else:
+            logger.info("Config file not found, using defaults")
 
     def save(self):
         """設定を保存"""
         try:
             with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(asdict(self.config), f, ensure_ascii=False, indent=2)
-        except IOError:
-            pass  # 保存エラーは無視
+            logger.debug(f"Config saved to: {self.config_path}")
+        except IOError as e:
+            logger.error(f"{ERROR_MESSAGES['config_save_error']}: {e}")
 
     def add_recent_url(self, url: str):
         """最近のURLを追加"""

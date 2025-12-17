@@ -9,11 +9,13 @@ import urllib.request
 import zipfile
 import shutil
 import subprocess
+import logging
 from typing import Optional, Callable
 
+from src.constants import FFMPEG_URL, FFMPEG_FILENAME, ERROR_MESSAGES
 
-FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-FFMPEG_FILENAME = "ffmpeg-master-latest-win64-gpl.zip"
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 
 def get_app_dir() -> str:
@@ -56,22 +58,59 @@ def download_ffmpeg(progress_callback: Optional[Callable[[int, int], None]] = No
     app_dir = get_app_dir()
     zip_path = os.path.join(app_dir, FFMPEG_FILENAME)
 
+    logger.info(f"Downloading FFmpeg from: {FFMPEG_URL}")
+
     def report_progress(block_num, block_size, total_size):
         if progress_callback and total_size > 0:
             downloaded = block_num * block_size
             progress_callback(downloaded, total_size)
 
-    urllib.request.urlretrieve(FFMPEG_URL, zip_path, report_progress)
+    try:
+        urllib.request.urlretrieve(FFMPEG_URL, zip_path, report_progress)
+        logger.info(f"FFmpeg downloaded to: {zip_path}")
+    except urllib.error.URLError as e:
+        logger.error(f"Download failed - network error: {e}")
+        raise Exception(ERROR_MESSAGES['network_error'])
+    except Exception as e:
+        logger.error(f"Download failed: {e}")
+        raise
+
     return zip_path
+
+
+def verify_zip_integrity(zip_path: str) -> bool:
+    """ZIPファイルの整合性を検証"""
+    logger.info(f"Verifying ZIP integrity: {zip_path}")
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # ZIPファイルの整合性チェック
+            bad_file = zip_ref.testzip()
+            if bad_file is not None:
+                logger.error(f"ZIP corruption detected in: {bad_file}")
+                return False
+            logger.info("ZIP integrity verified")
+            return True
+    except zipfile.BadZipFile as e:
+        logger.error(f"Invalid ZIP file: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"ZIP verification error: {e}")
+        return False
 
 
 def extract_ffmpeg(zip_path: str, progress_callback: Optional[Callable[[str], None]] = None) -> str:
     """FFmpegを展開"""
-    app_dir = get_app_dir()
+    logger.info(f"Extracting FFmpeg from: {zip_path}")
     ffmpeg_dir = get_ffmpeg_dir()
+
+    # ZIPファイルの整合性検証
+    if not verify_zip_integrity(zip_path):
+        logger.error("ZIP file is corrupted")
+        raise Exception(ERROR_MESSAGES['checksum_mismatch'])
 
     # 既存のディレクトリを削除
     if os.path.exists(ffmpeg_dir):
+        logger.debug(f"Removing existing directory: {ffmpeg_dir}")
         shutil.rmtree(ffmpeg_dir)
 
     os.makedirs(ffmpeg_dir, exist_ok=True)
@@ -79,6 +118,7 @@ def extract_ffmpeg(zip_path: str, progress_callback: Optional[Callable[[str], No
     if progress_callback:
         progress_callback("展開中...")
 
+    extracted_files = []
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         # binフォルダ内のexeファイルを取得
         for file_info in zip_ref.namelist():
@@ -94,9 +134,13 @@ def extract_ffmpeg(zip_path: str, progress_callback: Optional[Callable[[str], No
                 # ファイルを読み込んで書き込み
                 with zip_ref.open(file_info) as src, open(target_path, 'wb') as dst:
                     dst.write(src.read())
+                extracted_files.append(filename)
+                logger.debug(f"Extracted: {filename}")
 
     # ZIPファイルを削除
     os.remove(zip_path)
+    logger.info(f"ZIP file removed: {zip_path}")
+    logger.info(f"Extracted {len(extracted_files)} files to: {ffmpeg_dir}")
 
     return ffmpeg_dir
 
@@ -115,7 +159,10 @@ def setup_ffmpeg(
     extract_callback: Optional[Callable[[str], None]] = None
 ) -> bool:
     """FFmpegをセットアップ"""
+    logger.info("Starting FFmpeg setup...")
+
     if is_ffmpeg_installed():
+        logger.info("FFmpeg already installed")
         setup_ffmpeg_path()
         return True
 
@@ -129,9 +176,10 @@ def setup_ffmpeg(
         # PATHに追加
         setup_ffmpeg_path()
 
+        logger.info("FFmpeg setup completed successfully")
         return True
     except Exception as e:
-        print(f"FFmpegセットアップエラー: {e}")
+        logger.error(f"FFmpeg setup error: {e}")
         return False
 
 

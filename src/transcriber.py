@@ -6,9 +6,16 @@ Whisperを使用した音声文字起こし機能とYouTube字幕取得機能を
 import os
 import re
 import tempfile
+import logging
+import threading
 from typing import Callable, Optional, List, Dict, Any
 from dataclasses import dataclass
 import yt_dlp
+
+from src.constants import ERROR_MESSAGES, WHISPER_MODELS
+
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -92,18 +99,28 @@ class Transcriber:
         self._model_name = 'base'
         self._progress_callback: Optional[Callable[[Dict], None]] = None
         self._cancel_flag = False
+        self._cancel_lock = threading.Lock()  # スレッドセーフなキャンセル制御
+        logger.info("Transcriber initialized")
 
     def set_progress_callback(self, callback: Callable[[Dict], None]):
         """進捗コールバックを設定"""
         self._progress_callback = callback
 
     def cancel(self):
-        """処理をキャンセル"""
-        self._cancel_flag = True
+        """処理をキャンセル（スレッドセーフ）"""
+        with self._cancel_lock:
+            self._cancel_flag = True
+            logger.info("Transcription cancellation requested")
 
     def reset_cancel(self):
-        """キャンセルフラグをリセット"""
-        self._cancel_flag = False
+        """キャンセルフラグをリセット（スレッドセーフ）"""
+        with self._cancel_lock:
+            self._cancel_flag = False
+
+    def _is_cancelled(self) -> bool:
+        """キャンセル状態を確認（スレッドセーフ）"""
+        with self._cancel_lock:
+            return self._cancel_flag
 
     def _report_progress(self, status: str, percent: float = 0, message: str = ''):
         """進捗を報告"""
