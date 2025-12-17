@@ -108,7 +108,7 @@ class SettingsDialog(QDialog):
 
     def load_settings(self):
         settings = QSettings("YTDownloader", "Settings")
-        self.output_dir_edit.setText(settings.value("output_dir", os.path.expanduser("~/Downloads/YouTube")))
+        self.output_dir_edit.setText(settings.value("output_dir", os.path.expanduser("~/Downloads")))
         self.default_format_combo.setCurrentIndex(settings.value("default_format", 0, type=int))
         self.auto_subtitle_check.setChecked(settings.value("auto_subtitle", False, type=bool))
         self.whisper_model_combo.setCurrentIndex(settings.value("whisper_model", 1, type=int))

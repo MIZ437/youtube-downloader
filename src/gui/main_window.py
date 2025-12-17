@@ -62,13 +62,13 @@ class MainWindow(QMainWindow):
 
         # タブ作成（分離したモジュールを使用）
         self.download_tab = DownloadTab(self.downloader)
-        self.tab_widget.addTab(self.download_tab, "ダウンロード")
+        self.tab_widget.addTab(self.download_tab, "YouTubeダウンロード")
 
         self.playlist_tab = PlaylistTab(self.downloader)
-        self.tab_widget.addTab(self.playlist_tab, "再生リスト")
+        self.tab_widget.addTab(self.playlist_tab, "YouTube再生リスト一括ダウンロード")
 
         self.spaces_tab = SpacesTab()
-        self.tab_widget.addTab(self.spaces_tab, "Xスペース")
+        self.tab_widget.addTab(self.spaces_tab, "Xスペースダウンロード")
 
         self.transcribe_tab = TranscribeTab(self.transcriber)
         self.tab_widget.addTab(self.transcribe_tab, "文字起こし")
@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
     def load_settings(self):
         """設定を読み込み"""
         settings = QSettings("YTDownloader", "Settings")
-        default_dir = os.path.expanduser("~/Downloads/YouTube")
+        default_dir = os.path.expanduser("~/Downloads")
 
         # YouTube用保存先
         output_dir = settings.value("output_dir", default_dir)

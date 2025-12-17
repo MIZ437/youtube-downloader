@@ -86,6 +86,9 @@ class SpacesTab(QWidget):
         save_layout = QVBoxLayout()
         save_label = QLabel("保存先:")
         self.spaces_save_dir_edit = QLineEdit()
+        default_save_dir = os.path.expanduser("~/Downloads")
+        self.spaces_save_dir_edit.setText(default_save_dir)
+        self.spaces_save_dir_edit.setToolTip("実際の保存先はタイムスタンプ付きフォルダが作成されます")
         spaces_save_dir_btn = QPushButton("参照...")
         spaces_save_dir_btn.clicked.connect(self.browse_spaces_save_dir)
         save_layout.addWidget(save_label)
@@ -207,7 +210,7 @@ class SpacesTab(QWidget):
                 + (f"\n他{len(invalid_urls)-5}件" if len(invalid_urls) > 5 else ""))
 
         # 保存先設定（タイムスタンプ付きフォルダを作成）
-        base_dir = os.path.expanduser("~/Downloads")
+        base_dir = self.spaces_save_dir_edit.text().strip() or os.path.expanduser("~/Downloads")
         timestamp = datetime.now().strftime("%Y%m%d_%H_%M_%S")
         output_dir = os.path.join(base_dir, f"XSpaces_{timestamp}")
 
@@ -271,7 +274,7 @@ class SpacesTab(QWidget):
             self._cleanup_spaces_worker()
 
             # 一時ファイルを削除
-            output_dir = self.spaces_save_dir_edit.text() or os.path.expanduser("~/Downloads/YouTube")
+            output_dir = self.spaces_save_dir_edit.text() or os.path.expanduser("~/Downloads")
             deleted = self._delete_part_files(output_dir)
 
             # UI更新

@@ -66,6 +66,7 @@ class DownloadTab(QWidget):
             "480p (SD)",
             "360p (低画質)"
         ])
+        self.quality_combo.setCurrentIndex(1)  # MP4をデフォルトに
         quality_layout.addWidget(quality_label)
         quality_layout.addWidget(self.quality_combo)
         options_layout.addLayout(quality_layout)
@@ -84,6 +85,9 @@ class DownloadTab(QWidget):
         save_layout = QVBoxLayout()
         save_label = QLabel("保存先:")
         self.save_dir_edit = QLineEdit()
+        default_save_dir = os.path.expanduser("~/Downloads")
+        self.save_dir_edit.setText(default_save_dir)
+        self.save_dir_edit.setToolTip("実際の保存先はタイムスタンプ付きフォルダが作成されます")
         save_dir_btn = QPushButton("参照...")
         save_dir_btn.clicked.connect(self.browse_save_dir)
         save_layout.addWidget(save_label)
@@ -159,7 +163,7 @@ class DownloadTab(QWidget):
             return
 
         # 保存先設定（タイムスタンプ付きフォルダを作成）
-        base_dir = os.path.expanduser("~/Downloads")
+        base_dir = self.save_dir_edit.text().strip() or os.path.expanduser("~/Downloads")
         timestamp = datetime.now().strftime("%Y%m%d_%H_%M_%S")
         output_dir = os.path.join(base_dir, f"YouTube_{timestamp}")
         self.downloader.output_dir = output_dir

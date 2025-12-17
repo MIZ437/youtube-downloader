@@ -63,29 +63,45 @@ class TranscribeTab(QWidget):
         input_group = QGroupBox("入力")
         input_layout = QVBoxLayout()
 
-        # URLまたはファイル
+        # 入力タイプ選択（YouTube, Xスペース, ローカル）
         self.input_type_group = QButtonGroup()
-        url_radio = QRadioButton("YouTube URL")
-        url_radio.setChecked(True)
+        youtube_radio = QRadioButton("YouTube")
+        youtube_radio.setChecked(True)
+        spaces_radio = QRadioButton("Xスペース")
         file_radio = QRadioButton("ローカルファイル")
-        self.input_type_group.addButton(url_radio, 0)
-        self.input_type_group.addButton(file_radio, 1)
+        self.input_type_group.addButton(youtube_radio, 0)
+        self.input_type_group.addButton(spaces_radio, 1)
+        self.input_type_group.addButton(file_radio, 2)
         self.input_type_group.buttonClicked.connect(self.on_input_type_changed)
 
         radio_layout = QHBoxLayout()
-        radio_layout.addWidget(url_radio)
+        radio_layout.addWidget(youtube_radio)
+        radio_layout.addWidget(spaces_radio)
         radio_layout.addWidget(file_radio)
         input_layout.addLayout(radio_layout)
 
-        # URL入力
-        self.transcribe_url_input = QLineEdit()
-        self.transcribe_url_input.setPlaceholderText("https://www.youtube.com/watch?v=...")
+        # URL入力（複数対応）
+        url_label = QLabel("URLを入力（複数の場合は改行区切り）:")
+        input_layout.addWidget(url_label)
+        self.transcribe_url_input = QTextEdit()
+        self.transcribe_url_input.setAcceptRichText(False)
+        self.transcribe_url_input.setPlaceholderText(
+            "https://www.youtube.com/watch?v=...\n"
+            "（複数URLを改行区切りで入力可能）"
+        )
+        self.transcribe_url_input.setMaximumHeight(80)
         input_layout.addWidget(self.transcribe_url_input)
 
-        # ファイル選択
+        # ファイル選択（複数対応）
+        file_label = QLabel("ファイルを選択（複数可）:")
+        file_label.setEnabled(False)
+        self.file_label = file_label
+        input_layout.addWidget(file_label)
         file_layout = QHBoxLayout()
-        self.transcribe_file_input = QLineEdit()
-        self.transcribe_file_input.setPlaceholderText("音声/動画ファイルを選択...")
+        self.transcribe_file_input = QTextEdit()
+        self.transcribe_file_input.setAcceptRichText(False)
+        self.transcribe_file_input.setPlaceholderText("音声/動画ファイルを選択...\n（複数ファイルを改行区切りで入力可能）")
+        self.transcribe_file_input.setMaximumHeight(80)
         self.transcribe_file_input.setEnabled(False)
         self.transcribe_file_btn = QPushButton("参照...")
         self.transcribe_file_btn.setEnabled(False)
@@ -172,53 +188,91 @@ class TranscribeTab(QWidget):
         layout.addWidget(result_group)
 
     def browse_transcribe_file(self):
-        """文字起こし用ファイルを選択"""
-        file_path, _ = QFileDialog.getOpenFileName(
+        """文字起こし用ファイルを選択（複数可）"""
+        file_paths, _ = QFileDialog.getOpenFileNames(
             self, "ファイルを選択",
             "",
             "メディアファイル (*.mp3 *.mp4 *.wav *.m4a *.webm *.mkv *.avi);;すべてのファイル (*)"
         )
-        if file_path:
-            self.transcribe_file_input.setText(file_path)
+        if file_paths:
+            # 既存のテキストに追加
+            current = self.transcribe_file_input.toPlainText().strip()
+            if current:
+                new_paths = current + '\n' + '\n'.join(file_paths)
+            else:
+                new_paths = '\n'.join(file_paths)
+            self.transcribe_file_input.setPlainText(new_paths)
 
     def on_input_type_changed(self, button):
         """入力タイプ切り替え"""
-        is_url = self.input_type_group.checkedId() == 0
+        input_type = self.input_type_group.checkedId()
+        is_url = input_type in [0, 1]  # YouTube or Xスペース
+        is_youtube = input_type == 0
+        is_file = input_type == 2
+
         self.transcribe_url_input.setEnabled(is_url)
-        self.transcribe_file_input.setEnabled(not is_url)
-        self.transcribe_file_btn.setEnabled(not is_url)
-        self.prefer_youtube_sub_check.setEnabled(is_url)
+        self.file_label.setEnabled(is_file)
+        self.transcribe_file_input.setEnabled(is_file)
+        self.transcribe_file_btn.setEnabled(is_file)
+        self.prefer_youtube_sub_check.setEnabled(is_youtube)
+
+        # プレースホルダー更新
+        if input_type == 0:  # YouTube
+            self.transcribe_url_input.setPlaceholderText(
+                "https://www.youtube.com/watch?v=...\n"
+                "（複数URLを改行区切りで入力可能）"
+            )
+        elif input_type == 1:  # Xスペース
+            self.transcribe_url_input.setPlaceholderText(
+                "https://x.com/i/spaces/...\n"
+                "（複数URLを改行区切りで入力可能）"
+            )
 
     def start_transcribe(self):
         """文字起こし開始"""
-        is_url = self.input_type_group.checkedId() == 0
+        input_type = self.input_type_group.checkedId()
+        is_file = input_type == 2
 
-        if is_url:
-            url_or_path = self.transcribe_url_input.text().strip()
-            if not url_or_path:
+        if is_file:
+            # ローカルファイル
+            text = self.transcribe_file_input.toPlainText().strip()
+            if not text:
+                QMessageBox.warning(self, "エラー", "ファイルを選択してください")
+                return
+            # 複数ファイル対応
+            paths = [p.strip() for p in text.split('\n') if p.strip()]
+            invalid_paths = [p for p in paths if not os.path.exists(p)]
+            if invalid_paths:
+                QMessageBox.warning(self, "エラー", f"以下のファイルが見つかりません:\n{chr(10).join(invalid_paths[:5])}")
+                return
+            url_or_path = paths[0] if len(paths) == 1 else paths
+        else:
+            # URL（YouTube or Xスペース）
+            text = self.transcribe_url_input.toPlainText().strip()
+            if not text:
                 QMessageBox.warning(self, "エラー", "URLを入力してください")
                 return
-        else:
-            url_or_path = self.transcribe_file_input.text().strip()
-            if not url_or_path or not os.path.exists(url_or_path):
-                QMessageBox.warning(self, "エラー", "有効なファイルを選択してください")
-                return
+            # 複数URL対応
+            urls = [u.strip() for u in text.split('\n') if u.strip()]
+            url_or_path = urls[0] if len(urls) == 1 else urls
 
         # オプション取得
         lang_map = {0: 'ja', 1: 'en', 2: 'auto'}
         model_map = {0: 'tiny', 1: 'base', 2: 'small', 3: 'medium', 4: 'large'}
 
         options = {
-            'is_file': not is_url,
+            'is_file': is_file,
+            'is_spaces': input_type == 1,  # Xスペースかどうか
             'language': lang_map.get(self.transcribe_lang_combo.currentIndex(), 'ja'),
             'model': model_map.get(self.transcribe_model_combo.currentIndex(), 'base'),
-            'prefer_youtube': self.prefer_youtube_sub_check.isChecked(),
+            'prefer_youtube': self.prefer_youtube_sub_check.isChecked() and input_type == 0,
         }
 
         # UI更新
         self.transcribe_btn.setEnabled(False)
         self.transcribe_progress.setValue(0)
-        self.transcribe_progress_label.setText("文字起こし準備中...")
+        item_count = len(url_or_path) if isinstance(url_or_path, list) else 1
+        self.transcribe_progress_label.setText(f"文字起こし準備中... ({item_count}件)")
         self.transcribe_result.clear()
 
         # ワーカー開始
@@ -298,6 +352,6 @@ class TranscribeTab(QWidget):
 
     def set_file_for_transcribe(self, file_path: str):
         """外部からファイルを設定して文字起こしモードに切り替え"""
-        self.transcribe_file_input.setText(file_path)
-        self.input_type_group.button(1).setChecked(True)
+        self.transcribe_file_input.setPlainText(file_path)
+        self.input_type_group.button(2).setChecked(True)  # ローカルファイル
         self.on_input_type_changed(None)

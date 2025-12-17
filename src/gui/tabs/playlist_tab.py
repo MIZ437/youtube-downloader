@@ -8,10 +8,10 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QLabel, QLineEdit, QPushButton, QProgressBar, QCheckBox,
-    QSpinBox, QDateEdit, QTableWidget, QTableWidgetItem,
+    QSpinBox, QComboBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QAbstractItemView, QMessageBox
 )
-from PyQt6.QtCore import Qt, QDate, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from src.gui.workers import PlaylistFetchWorker
 from src.downloader import YouTubeDownloader, PlaylistFilter
@@ -44,35 +44,60 @@ class PlaylistTab(QWidget):
         self.cancel_fetch_btn = QPushButton("中止")
         self.cancel_fetch_btn.setEnabled(False)
         self.cancel_fetch_btn.clicked.connect(self.cancel_fetch)
+        self.clear_list_btn = QPushButton("クリア")
+        self.clear_list_btn.clicked.connect(self.clear_playlist)
         url_layout.addWidget(url_label)
         url_layout.addWidget(self.playlist_url_input, 1)
         url_layout.addWidget(self.fetch_playlist_btn)
         url_layout.addWidget(self.cancel_fetch_btn)
+        url_layout.addWidget(self.clear_list_btn)
         layout.addLayout(url_layout)
 
         # フィルターオプション
         filter_group = QGroupBox("フィルター条件")
         filter_layout = QHBoxLayout()
 
-        # 日付フィルター
+        # 日付フィルター（年・月をプルダウンで選択）
         date_layout = QVBoxLayout()
         date_label = QLabel("アップロード日:")
-        self.date_from = QDateEdit()
-        self.date_from.setCalendarPopup(True)
-        self.date_from.setDate(QDate(2000, 1, 1))
-        self.date_to = QDateEdit()
-        self.date_to.setCalendarPopup(True)
-        self.date_to.setDate(QDate.currentDate())
         self.use_date_filter = QCheckBox("日付でフィルター")
+
+        # From: 年・月プルダウン
+        self.year_from = QComboBox()
+        self.year_from.addItems([str(y) for y in range(2005, 2027)])
+        self.year_from.setCurrentText("2005")
+        self.year_from.setFixedWidth(70)
+        self.month_from = QComboBox()
+        self.month_from.addItems([str(m) for m in range(1, 13)])
+        self.month_from.setFixedWidth(50)
+
+        # To: 年・月プルダウン
+        self.year_to = QComboBox()
+        self.year_to.addItems([str(y) for y in range(2005, 2027)])
+        self.year_to.setCurrentText("2026")  # 2026年をデフォルト
+        self.year_to.setFixedWidth(70)
+        self.month_to = QComboBox()
+        self.month_to.addItems([str(m) for m in range(1, 13)])
+        self.month_to.setCurrentText("12")
+        self.month_to.setFixedWidth(50)
+
         date_layout.addWidget(date_label)
         date_layout.addWidget(self.use_date_filter)
         date_from_layout = QHBoxLayout()
-        date_from_layout.addWidget(QLabel("From:"))
-        date_from_layout.addWidget(self.date_from)
+        from_label = QLabel("From:")
+        from_label.setFixedWidth(35)
+        date_from_layout.addWidget(from_label)
+        date_from_layout.addWidget(self.year_from)
+        date_from_layout.addWidget(self.month_from)
+        date_from_layout.addStretch()
         date_layout.addLayout(date_from_layout)
         date_to_layout = QHBoxLayout()
-        date_to_layout.addWidget(QLabel("To:"))
-        date_to_layout.addWidget(self.date_to)
+        to_label = QLabel("To:")
+        to_label.setFixedWidth(35)
+        date_to_layout.addWidget(to_label)
+        date_to_layout.addWidget(self.year_to)
+        date_to_layout.addWidget(self.month_to)
+        date_to_layout.addStretch()
         date_layout.addLayout(date_to_layout)
         filter_layout.addLayout(date_layout)
 
@@ -99,15 +124,15 @@ class PlaylistTab(QWidget):
         view_layout.addLayout(max_view_layout)
         filter_layout.addLayout(view_layout)
 
-        # 再生時間フィルター
+        # 再生時間フィルター（分単位）
         duration_layout = QVBoxLayout()
-        duration_label = QLabel("再生時間(秒):")
+        duration_label = QLabel("再生時間(分):")
         self.use_duration_filter = QCheckBox("再生時間でフィルター")
         self.min_duration = QSpinBox()
-        self.min_duration.setRange(0, 86400)
+        self.min_duration.setRange(0, 1440)  # 最大24時間
         self.max_duration = QSpinBox()
-        self.max_duration.setRange(0, 86400)
-        self.max_duration.setValue(86400)
+        self.max_duration.setRange(0, 1440)
+        self.max_duration.setValue(1440)
         duration_layout.addWidget(duration_label)
         duration_layout.addWidget(self.use_duration_filter)
         min_dur_layout = QHBoxLayout()
@@ -201,23 +226,29 @@ class PlaylistTab(QWidget):
 
         if self.use_date_filter.isChecked():
             filter_options.date_from = datetime(
-                self.date_from.date().year(),
-                self.date_from.date().month(),
-                self.date_from.date().day()
+                int(self.year_from.currentText()),
+                int(self.month_from.currentText()),
+                1
             )
-            filter_options.date_to = datetime(
-                self.date_to.date().year(),
-                self.date_to.date().month(),
-                self.date_to.date().day()
-            )
+            # 月末日を計算
+            year_to = int(self.year_to.currentText())
+            month_to = int(self.month_to.currentText())
+            if month_to == 12:
+                next_month = datetime(year_to + 1, 1, 1)
+            else:
+                next_month = datetime(year_to, month_to + 1, 1)
+            from datetime import timedelta
+            last_day = (next_month - timedelta(days=1)).day
+            filter_options.date_to = datetime(year_to, month_to, last_day)
 
         if self.use_view_filter.isChecked():
             filter_options.min_views = self.min_views.value()
             filter_options.max_views = self.max_views.value()
 
         if self.use_duration_filter.isChecked():
-            filter_options.min_duration = self.min_duration.value()
-            filter_options.max_duration = self.max_duration.value()
+            # 分→秒に変換
+            filter_options.min_duration = self.min_duration.value() * 60
+            filter_options.max_duration = self.max_duration.value() * 60
 
         title_contains = self.title_contains.text().strip()
         title_excludes = self.title_excludes.text().strip()
@@ -284,8 +315,10 @@ class PlaylistTab(QWidget):
         if dates:
             min_date = min(dates)
             max_date = max(dates)
-            self.date_from.setDate(QDate(min_date.year, min_date.month, min_date.day))
-            self.date_to.setDate(QDate(max_date.year, max_date.month, max_date.day))
+            self.year_from.setCurrentText(str(min_date.year))
+            self.month_from.setCurrentText(str(min_date.month))
+            self.year_to.setCurrentText(str(max_date.year))
+            self.month_to.setCurrentText(str(max_date.month))
 
         # 再生回数の範囲を計算
         view_counts = [v.view_count for v in videos if v.view_count is not None]
@@ -293,11 +326,11 @@ class PlaylistTab(QWidget):
             self.min_views.setValue(min(view_counts))
             self.max_views.setValue(max(view_counts))
 
-        # 再生時間の範囲を計算
+        # 再生時間の範囲を計算（秒→分に変換）
         durations = [v.duration for v in videos if v.duration is not None]
         if durations:
-            self.min_duration.setValue(min(durations))
-            self.max_duration.setValue(max(durations))
+            self.min_duration.setValue(min(durations) // 60)
+            self.max_duration.setValue(max(durations) // 60 + 1)  # 切り上げ
 
     def _update_table(self, videos):
         """テーブルを更新"""
@@ -336,16 +369,20 @@ class PlaylistTab(QWidget):
         # 日付フィルター
         if self.use_date_filter.isChecked():
             date_from = datetime(
-                self.date_from.date().year(),
-                self.date_from.date().month(),
-                self.date_from.date().day()
+                int(self.year_from.currentText()),
+                int(self.month_from.currentText()),
+                1
             )
-            date_to = datetime(
-                self.date_to.date().year(),
-                self.date_to.date().month(),
-                self.date_to.date().day(),
-                23, 59, 59  # 終了日は23:59:59まで含める
-            )
+            # 月末日を計算
+            year_to = int(self.year_to.currentText())
+            month_to = int(self.month_to.currentText())
+            if month_to == 12:
+                next_month = datetime(year_to + 1, 1, 1)
+            else:
+                next_month = datetime(year_to, month_to + 1, 1)
+            from datetime import timedelta
+            last_day = (next_month - timedelta(days=1)).day
+            date_to = datetime(year_to, month_to, last_day, 23, 59, 59)
             filtered = [v for v in filtered if v.upload_datetime and date_from <= v.upload_datetime <= date_to]
 
         # 再生回数フィルター
@@ -354,10 +391,10 @@ class PlaylistTab(QWidget):
             max_v = self.max_views.value()
             filtered = [v for v in filtered if v.view_count is not None and min_v <= v.view_count <= max_v]
 
-        # 再生時間フィルター
+        # 再生時間フィルター（分→秒に変換して比較）
         if self.use_duration_filter.isChecked():
-            min_d = self.min_duration.value()
-            max_d = self.max_duration.value()
+            min_d = self.min_duration.value() * 60  # 分→秒
+            max_d = self.max_duration.value() * 60
             filtered = [v for v in filtered if v.duration is not None and min_d <= v.duration <= max_d]
 
         # タイトルフィルター
@@ -392,6 +429,33 @@ class PlaylistTab(QWidget):
         self.playlist_videos = self.all_videos
         self._update_table(self.all_videos)
         self.playlist_progress_label.setText(f"全件表示: {len(self.all_videos)}件")
+
+    def clear_playlist(self):
+        """再生リストをクリア（URLと一覧を消去）"""
+        self.playlist_url_input.clear()
+        self.playlist_table.setRowCount(0)
+        self.all_videos = []
+        self.playlist_videos = []
+        self.playlist_progress_label.setText("再生リストを読み込んでください")
+        self.playlist_progress.setValue(0)
+        self.selected_count_label.setText("選択: 0件")
+
+        # フィルターもリセット
+        self.use_date_filter.setChecked(False)
+        self.use_view_filter.setChecked(False)
+        self.use_duration_filter.setChecked(False)
+        self.title_contains.clear()
+        self.title_excludes.clear()
+
+        # デフォルト値に戻す
+        self.year_from.setCurrentText("2005")
+        self.month_from.setCurrentText("1")
+        self.year_to.setCurrentText("2026")
+        self.month_to.setCurrentText("12")
+        self.min_views.setValue(0)
+        self.max_views.setValue(1000000000)
+        self.min_duration.setValue(0)
+        self.max_duration.setValue(1440)
 
     def on_playlist_error(self, error_msg):
         """再生リスト取得エラー"""
