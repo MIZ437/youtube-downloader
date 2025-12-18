@@ -38,8 +38,9 @@ REQUIRED_PACKAGES = [
 FFMPEG_URL = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 FFMPEG_FILENAME = "ffmpeg-master-latest-win64-gpl.zip"
 
-# 初回セットアップ完了フラグファイル
+# フラグファイル
 SETUP_COMPLETE_FLAG = os.path.join(APP_DIR, '.setup_complete')
+SHORTCUT_OFFERED_FLAG = os.path.join(APP_DIR, '.shortcut_offered')
 DESKTOP_SHORTCUT = os.path.join(os.path.expanduser("~"), "Desktop", "YouTube Downloader.lnk")
 
 
@@ -279,14 +280,19 @@ class LauncherApp:
         except Exception as e:
             self.show_error(f"エラーが発生しました:\n{str(e)}")
 
+    def should_ask_shortcut(self):
+        """ショートカット作成を確認すべきか判定"""
+        # ショートカットが存在しない＆まだ確認していない場合のみ
+        return not os.path.exists(DESKTOP_SHORTCUT) and not os.path.exists(SHORTCUT_OFFERED_FLAG)
+
     def show_result(self):
         """チェック結果を表示してボタンを更新"""
         if self.packages_ok and self.ffmpeg_ok:
             self.log("=== 全ての準備が完了しました ===", 'ok')
             self.update_status("準備完了！")
 
-            # 初回の場合はショートカット確認
-            if self.is_first_run and not os.path.exists(DESKTOP_SHORTCUT):
+            # ショートカットが存在しない場合は確認
+            if self.should_ask_shortcut():
                 self.root.after(500, self.ask_desktop_shortcut)
             else:
                 # 自動起動
@@ -385,14 +391,21 @@ class LauncherApp:
         self.ffmpeg_btn.pack_forget()
         self.launch_btn.config(text="アプリを起動", state=tk.NORMAL)
 
-        # 初回の場合はショートカット確認
-        if self.is_first_run and not os.path.exists(DESKTOP_SHORTCUT):
+        # ショートカットが存在しない場合は確認
+        if self.should_ask_shortcut():
             self.root.after(500, self.ask_desktop_shortcut)
         else:
             self.root.after(1000, self.launch_app)
 
     def ask_desktop_shortcut(self):
         """デスクトップショートカット作成を確認"""
+        # 確認済みフラグを作成（再度聞かないように）
+        try:
+            with open(SHORTCUT_OFFERED_FLAG, 'w') as f:
+                f.write('offered')
+        except:
+            pass
+
         result = messagebox.askyesno(
             "セットアップ完了",
             "デスクトップにショートカットを作成しますか？\n\n"
