@@ -40,6 +40,11 @@ class LauncherApp:
         self.root.geometry("500x300")
         self.root.resizable(False, False)
 
+        # アイコン設定
+        icon_path = os.path.join(APP_DIR, "icon.ico")
+        if os.path.exists(icon_path):
+            self.root.iconbitmap(icon_path)
+
         # ウィンドウを中央に配置
         self.center_window()
 

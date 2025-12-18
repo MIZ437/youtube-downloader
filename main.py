@@ -18,7 +18,7 @@ sys.path.insert(0, app_path)
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt, QLocale
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QIcon
 
 from src.gui.main_window import MainWindow
 from src.gui.setup_dialog import check_and_setup_ffmpeg
@@ -36,6 +36,11 @@ def main():
     app.setApplicationName("YouTube Downloader")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("YTDownloader")
+
+    # アプリケーションアイコン設定
+    icon_path = os.path.join(app_path, "icon.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
 
     # FFmpegチェック・セットアップ
     check_and_setup_ffmpeg()
