@@ -172,6 +172,8 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.load_settings()
+            # 文字起こしタブのUI状態を更新
+            self.transcribe_tab.update_model_ui_state()
 
     def show_about(self):
         """アプリ情報を表示"""
