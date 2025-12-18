@@ -275,39 +275,44 @@ class LauncherApp:
             if sys.platform != 'win32':
                 return
 
-            # VBScriptを使ってショートカット作成
             desktop = os.path.join(os.path.expanduser("~"), "Desktop")
             shortcut_path = os.path.join(desktop, "YouTube Downloader.lnk")
             target_path = os.path.join(APP_DIR, "YouTubeDownloader.vbs")
             icon_path = os.path.join(APP_DIR, "icon.ico")
 
-            vbs_script = f'''
-Set objShell = CreateObject("WScript.Shell")
-Set objShortcut = objShell.CreateShortcut("{shortcut_path}")
-objShortcut.TargetPath = "{target_path}"
-objShortcut.WorkingDirectory = "{APP_DIR}"
-objShortcut.Description = "YouTube Downloader"
-objShortcut.IconLocation = "{icon_path},0"
-objShortcut.Save
+            # PowerShellスクリプトファイルを作成（Unicode対応）
+            ps_script = f'''
+$WshShell = New-Object -ComObject WScript.Shell
+$Shortcut = $WshShell.CreateShortcut('{shortcut_path}')
+$Shortcut.TargetPath = '{target_path}'
+$Shortcut.WorkingDirectory = '{APP_DIR}'
+$Shortcut.Description = 'YouTube Downloader'
+$Shortcut.IconLocation = '{icon_path},0'
+$Shortcut.Save()
 '''
-            # 一時VBSファイルを作成して実行
-            temp_vbs = os.path.join(APP_DIR, '_create_shortcut_temp.vbs')
-            with open(temp_vbs, 'w', encoding='utf-8') as f:
-                f.write(vbs_script)
+            # 一時ファイルに保存して実行
+            temp_ps = os.path.join(APP_DIR, '_create_shortcut.ps1')
+            with open(temp_ps, 'w', encoding='utf-8-sig') as f:
+                f.write(ps_script)
 
-            subprocess.run(
-                ['wscript', temp_vbs],
+            result = subprocess.run(
+                ['powershell', '-ExecutionPolicy', 'Bypass', '-File', temp_ps],
+                capture_output=True,
+                text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
 
             # 一時ファイル削除
             try:
-                os.remove(temp_vbs)
+                os.remove(temp_ps)
             except:
                 pass
 
-            self.log("")
-            self.log("デスクトップにショートカットを作成しました", 'ok')
+            if result.returncode == 0:
+                self.log("")
+                self.log("デスクトップにショートカットを作成しました", 'ok')
+            else:
+                self.log(f"ショートカット作成に失敗: {result.stderr}", 'error')
 
         except Exception as e:
             self.log(f"ショートカット作成に失敗: {e}", 'error')
