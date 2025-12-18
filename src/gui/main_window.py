@@ -82,6 +82,18 @@ class MainWindow(QMainWindow):
         """メニューバーセットアップ"""
         menubar = self.menuBar()
 
+        # メニューのスタイル設定（マウスオーバー時の視認性向上）
+        menubar.setStyleSheet("""
+            QMenuBar::item:selected {
+                background-color: #0078d4;
+                color: white;
+            }
+            QMenu::item:selected {
+                background-color: #0078d4;
+                color: white;
+            }
+        """)
+
         # ファイルメニュー
         file_menu = menubar.addMenu("ファイル")
 

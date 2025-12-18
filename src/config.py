@@ -31,6 +31,11 @@ class AppConfig:
     default_language: str = "ja"
     prefer_youtube_subtitles: bool = True
 
+    # 文字起こし精度向上設定
+    whisper_engine: str = "openai-whisper"  # openai-whisper, faster-whisper
+    custom_vocabulary: str = ""  # カスタム辞書（用語リスト）
+    use_kotoba_whisper: bool = False  # 日本語特化モデルを使用
+
     # ウィンドウ設定
     window_width: int = 900
     window_height: int = 700

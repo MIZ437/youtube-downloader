@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QTextEdit, QFileDialog, QMessageBox, QRadioButton, QButtonGroup
 )
 from PyQt6.QtGui import QClipboard
-from PyQt6.QtCore import QCoreApplication
+from PyQt6.QtCore import QCoreApplication, QSettings
 
 from src.gui.utils import style_combobox
 from src.gui.workers import TranscribeWorker
@@ -115,7 +115,10 @@ class TranscribeTab(QWidget):
 
         # オプション
         options_group = QGroupBox("文字起こしオプション")
-        options_layout = QHBoxLayout()
+        options_layout = QVBoxLayout()
+
+        # 上段: 言語、モデル、チェック
+        top_options_layout = QHBoxLayout()
 
         # 言語
         lang_layout = QVBoxLayout()
@@ -125,7 +128,7 @@ class TranscribeTab(QWidget):
         self.transcribe_lang_combo.addItems(["日本語 (ja)", "英語 (en)", "自動検出 (auto)"])
         lang_layout.addWidget(lang_label)
         lang_layout.addWidget(self.transcribe_lang_combo)
-        options_layout.addLayout(lang_layout)
+        top_options_layout.addLayout(lang_layout)
 
         # モデル（推奨マーク付き）
         model_layout = QVBoxLayout()
@@ -137,14 +140,30 @@ class TranscribeTab(QWidget):
         self.transcribe_model_combo.setCurrentIndex(1)  # base をデフォルト
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.transcribe_model_combo)
-        options_layout.addLayout(model_layout)
+        top_options_layout.addLayout(model_layout)
 
         # オプションチェック
         check_layout = QVBoxLayout()
         self.prefer_youtube_sub_check = QCheckBox("YouTube字幕を優先")
         self.prefer_youtube_sub_check.setChecked(True)
         check_layout.addWidget(self.prefer_youtube_sub_check)
-        options_layout.addLayout(check_layout)
+        top_options_layout.addLayout(check_layout)
+
+        options_layout.addLayout(top_options_layout)
+
+        # 下段: カスタム辞書入力（精度向上）
+        vocab_layout = QHBoxLayout()
+        vocab_label = QLabel("追加辞書（読点「、」/カンマ「,」区切り）:")
+        self.custom_vocab_input = QLineEdit()
+        self.custom_vocab_input.setPlaceholderText("例: YouTube, Whisper, 固有名詞...")
+        vocab_layout.addWidget(vocab_label)
+        vocab_layout.addWidget(self.custom_vocab_input)
+        options_layout.addLayout(vocab_layout)
+
+        # 説明ラベル
+        vocab_note = QLabel("※ここは一時的な入力欄です。常に使う辞書は設定画面で登録してください")
+        vocab_note.setStyleSheet("color: gray; font-size: 11px;")
+        options_layout.addWidget(vocab_note)
 
         options_group.setLayout(options_layout)
         layout.addWidget(options_group)
@@ -256,6 +275,27 @@ class TranscribeTab(QWidget):
             urls = [u.strip() for u in text.split('\n') if u.strip()]
             url_or_path = urls[0] if len(urls) == 1 else urls
 
+        # 設定から精度向上オプションを読み込み
+        settings = QSettings("YTDownloader", "Settings")
+        engine_idx = settings.value("whisper_engine", 0, type=int)
+        engine_map = {0: 'openai-whisper', 1: 'faster-whisper'}
+        whisper_engine = engine_map.get(engine_idx, 'openai-whisper')
+
+        use_kotoba = settings.value("use_kotoba", False, type=bool)
+        saved_vocabulary = settings.value("custom_vocabulary", "", type=str)
+
+        # 画面入力のカスタム辞書と設定の辞書を結合
+        input_vocabulary = self.custom_vocab_input.text().strip()
+        if saved_vocabulary and input_vocabulary:
+            custom_vocabulary = f"{saved_vocabulary}、{input_vocabulary}"
+        else:
+            custom_vocabulary = saved_vocabulary or input_vocabulary
+
+        # Transcriberに設定を適用
+        self.transcriber.set_engine(whisper_engine)
+        self.transcriber.set_use_kotoba(use_kotoba)
+        self.transcriber.set_custom_vocabulary(custom_vocabulary)
+
         # オプション取得
         lang_map = {0: 'ja', 1: 'en', 2: 'auto'}
         model_map = {0: 'tiny', 1: 'base', 2: 'small', 3: 'medium', 4: 'large'}
@@ -266,6 +306,7 @@ class TranscribeTab(QWidget):
             'language': lang_map.get(self.transcribe_lang_combo.currentIndex(), 'ja'),
             'model': model_map.get(self.transcribe_model_combo.currentIndex(), 'base'),
             'prefer_youtube': self.prefer_youtube_sub_check.isChecked() and input_type == 0,
+            'custom_vocabulary': custom_vocabulary,
         }
 
         # UI更新

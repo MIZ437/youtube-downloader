@@ -33,6 +33,18 @@ WHISPER_VRAM_REQUIREMENTS = {
     'large': 10000,  # 10GB
 }
 
+# Whisperエンジン設定
+WHISPER_ENGINES = {
+    'openai-whisper': '標準 Whisper（安定性重視）',
+    'faster-whisper': 'Faster Whisper（2-4倍高速）',
+}
+
+# faster-whisperモデル（large-v3対応）
+FASTER_WHISPER_MODELS = ['tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3']
+
+# kotoba-whisper モデルID（Hugging Face）
+KOTOBA_WHISPER_MODEL = 'kotoba-tech/kotoba-whisper-v2.1'
+
 # =============================================================================
 # UI設定
 # =============================================================================

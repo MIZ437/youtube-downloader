@@ -23,11 +23,15 @@ class TranscribeWorker(QThread):
         try:
             self.transcriber.set_progress_callback(lambda d: self.progress.emit(d))
 
+            # カスタム辞書を取得
+            custom_vocabulary = self.options.get('custom_vocabulary', '')
+
             if self.options.get('is_file', False):
                 result = self.transcriber.transcribe_audio(
                     self.url_or_path,
                     language=self.options.get('language', 'ja'),
-                    model_name=self.options.get('model', 'base')
+                    model_name=self.options.get('model', 'base'),
+                    custom_vocabulary=custom_vocabulary
                 )
             else:
                 result = self.transcriber.transcribe_youtube(

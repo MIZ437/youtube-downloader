@@ -7,7 +7,8 @@ import os
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QGroupBox,
     QLineEdit, QPushButton, QHBoxLayout, QComboBox,
-    QCheckBox, QDialogButtonBox, QFileDialog
+    QCheckBox, QDialogButtonBox, QFileDialog, QTextEdit,
+    QLabel
 )
 from PyQt6.QtCore import QSettings
 
@@ -93,6 +94,46 @@ class SettingsDialog(QDialog):
         transcribe_group.setLayout(transcribe_layout)
         layout.addWidget(transcribe_group)
 
+        # 文字起こし精度向上設定
+        accuracy_group = QGroupBox("精度向上設定")
+        accuracy_layout = QFormLayout()
+
+        # Whisperエンジン選択
+        self.whisper_engine_combo = QComboBox()
+        style_combobox(self.whisper_engine_combo)
+        self.whisper_engine_combo.addItems([
+            "標準 Whisper（安定性重視）",
+            "Faster Whisper（2-4倍高速）"
+        ])
+        accuracy_layout.addRow("エンジン:", self.whisper_engine_combo)
+
+        # kotoba-whisperオプション
+        self.use_kotoba_check = QCheckBox("kotoba-whisper使用（日本語特化・高精度）")
+        self.use_kotoba_check.setToolTip(
+            "日本語に特化したWhisperモデルを使用します。\n"
+            "初回使用時にモデルのダウンロードが必要です（約3GB）。"
+        )
+        accuracy_layout.addRow("", self.use_kotoba_check)
+
+        # カスタム辞書（用語リスト）
+        vocab_label = QLabel("カスタム辞書（読点「、」またはカンマ「,」区切り）:")
+        accuracy_layout.addRow(vocab_label)
+
+        self.custom_vocabulary_edit = QTextEdit()
+        self.custom_vocabulary_edit.setPlaceholderText(
+            "例: YouTube、ダウンローダー、Whisper、yt-dlp"
+        )
+        self.custom_vocabulary_edit.setMaximumHeight(80)
+        accuracy_layout.addRow(self.custom_vocabulary_edit)
+
+        # 説明ラベル
+        vocab_note = QLabel("※この設定は保存され、毎回自動で適用されます（最大100〜150文字程度が効果的）")
+        vocab_note.setStyleSheet("color: gray; font-size: 11px;")
+        accuracy_layout.addRow(vocab_note)
+
+        accuracy_group.setLayout(accuracy_layout)
+        layout.addWidget(accuracy_group)
+
         # ボタン
         button_box = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -115,6 +156,11 @@ class SettingsDialog(QDialog):
         self.default_lang_combo.setCurrentIndex(settings.value("default_lang", 0, type=int))
         self.prefer_youtube_check.setChecked(settings.value("prefer_youtube", True, type=bool))
 
+        # 精度向上設定
+        self.whisper_engine_combo.setCurrentIndex(settings.value("whisper_engine", 0, type=int))
+        self.use_kotoba_check.setChecked(settings.value("use_kotoba", False, type=bool))
+        self.custom_vocabulary_edit.setPlainText(settings.value("custom_vocabulary", "", type=str))
+
     def save_settings(self):
         settings = QSettings("YTDownloader", "Settings")
         settings.setValue("output_dir", self.output_dir_edit.text())
@@ -123,4 +169,10 @@ class SettingsDialog(QDialog):
         settings.setValue("whisper_model", self.whisper_model_combo.currentIndex())
         settings.setValue("default_lang", self.default_lang_combo.currentIndex())
         settings.setValue("prefer_youtube", self.prefer_youtube_check.isChecked())
+
+        # 精度向上設定
+        settings.setValue("whisper_engine", self.whisper_engine_combo.currentIndex())
+        settings.setValue("use_kotoba", self.use_kotoba_check.isChecked())
+        settings.setValue("custom_vocabulary", self.custom_vocabulary_edit.toPlainText())
+
         self.accept()

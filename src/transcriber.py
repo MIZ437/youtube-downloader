@@ -1,6 +1,7 @@
 """
 文字起こしモジュール
 Whisperを使用した音声文字起こし機能とYouTube字幕取得機能を提供
+対応エンジン: openai-whisper, faster-whisper, kotoba-whisper
 """
 
 import os
@@ -12,7 +13,7 @@ from typing import Callable, Optional, List, Dict, Any
 from dataclasses import dataclass
 import yt_dlp
 
-from src.constants import ERROR_MESSAGES, WHISPER_MODELS
+from src.constants import ERROR_MESSAGES, WHISPER_MODELS, KOTOBA_WHISPER_MODEL
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -96,11 +97,32 @@ class Transcriber:
 
     def __init__(self):
         self._whisper_model = None
+        self._faster_whisper_model = None
+        self._kotoba_pipeline = None
         self._model_name = 'base'
+        self._engine = 'openai-whisper'  # openai-whisper, faster-whisper
+        self._use_kotoba = False
+        self._custom_vocabulary = ''  # カスタム辞書（initial_prompt用）
         self._progress_callback: Optional[Callable[[Dict], None]] = None
         self._cancel_flag = False
         self._cancel_lock = threading.Lock()  # スレッドセーフなキャンセル制御
         logger.info("Transcriber initialized")
+
+    def set_engine(self, engine: str):
+        """使用するWhisperエンジンを設定"""
+        if engine in ['openai-whisper', 'faster-whisper']:
+            self._engine = engine
+            logger.info(f"Whisper engine set to: {engine}")
+
+    def set_custom_vocabulary(self, vocabulary: str):
+        """カスタム辞書（用語リスト）を設定"""
+        self._custom_vocabulary = vocabulary.strip()
+        logger.info(f"Custom vocabulary set: {len(self._custom_vocabulary)} chars")
+
+    def set_use_kotoba(self, use_kotoba: bool):
+        """kotoba-whisperを使用するかどうかを設定"""
+        self._use_kotoba = use_kotoba
+        logger.info(f"Use kotoba-whisper: {use_kotoba}")
 
     def set_progress_callback(self, callback: Callable[[Dict], None]):
         """進捗コールバックを設定"""
@@ -132,7 +154,18 @@ class Transcriber:
             })
 
     def load_whisper_model(self, model_name: str = 'base'):
-        """Whisperモデルを読み込み"""
+        """Whisperモデルを読み込み（エンジンに応じて適切なモデルをロード）"""
+        # kotoba-whisperを使う場合
+        if self._use_kotoba:
+            self._load_kotoba_model()
+            return
+
+        # faster-whisperを使う場合
+        if self._engine == 'faster-whisper':
+            self._load_faster_whisper_model(model_name)
+            return
+
+        # 標準openai-whisperを使う場合
         if self._whisper_model is None or self._model_name != model_name:
             self._report_progress('loading', 0, f'Whisperモデル({model_name})を読み込み中...')
             try:
@@ -142,6 +175,59 @@ class Transcriber:
                 self._report_progress('loaded', 100, 'モデル読み込み完了')
             except Exception as e:
                 raise Exception(f"Whisperモデルの読み込みに失敗: {str(e)}")
+
+    def _load_faster_whisper_model(self, model_name: str = 'base'):
+        """faster-whisperモデルを読み込み"""
+        # large -> large-v2 に変換
+        if model_name == 'large':
+            model_name = 'large-v2'
+
+        if self._faster_whisper_model is None or self._model_name != model_name:
+            self._report_progress('loading', 0, f'Faster Whisperモデル({model_name})を読み込み中...')
+            try:
+                from faster_whisper import WhisperModel
+                import torch
+
+                # デバイス選択
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                compute_type = "float16" if device == "cuda" else "int8"
+
+                self._faster_whisper_model = WhisperModel(
+                    model_name,
+                    device=device,
+                    compute_type=compute_type
+                )
+                self._model_name = model_name
+                self._report_progress('loaded', 100, f'Faster Whisperモデル読み込み完了 (device: {device})')
+                logger.info(f"Faster Whisper model loaded: {model_name} on {device}")
+            except ImportError:
+                raise Exception("faster-whisperがインストールされていません。pip install faster-whisper を実行してください。")
+            except Exception as e:
+                raise Exception(f"Faster Whisperモデルの読み込みに失敗: {str(e)}")
+
+    def _load_kotoba_model(self):
+        """kotoba-whisperモデルを読み込み"""
+        if self._kotoba_pipeline is None:
+            self._report_progress('loading', 0, 'kotoba-whisperモデルを読み込み中...')
+            try:
+                import torch
+                from transformers import pipeline
+
+                device = "cuda:0" if torch.cuda.is_available() else "cpu"
+                torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+                self._kotoba_pipeline = pipeline(
+                    "automatic-speech-recognition",
+                    model=KOTOBA_WHISPER_MODEL,
+                    torch_dtype=torch_dtype,
+                    device=device,
+                )
+                self._report_progress('loaded', 100, f'kotoba-whisper読み込み完了 (device: {device})')
+                logger.info(f"Kotoba-whisper model loaded on {device}")
+            except ImportError:
+                raise Exception("transformersがインストールされていません。pip install transformers を実行してください。")
+            except Exception as e:
+                raise Exception(f"kotoba-whisperモデルの読み込みに失敗: {str(e)}")
 
     def get_youtube_subtitles(self, url: str, lang: str = 'ja') -> Optional[TranscriptResult]:
         """YouTubeの字幕を取得"""
@@ -340,42 +426,150 @@ class Transcriber:
         return segments
 
     def transcribe_audio(self, audio_path: str, language: str = 'ja',
-                         model_name: str = 'base') -> TranscriptResult:
+                         model_name: str = 'base',
+                         custom_vocabulary: str = None) -> TranscriptResult:
         """音声ファイルを文字起こし"""
         self.reset_cancel()
         self.load_whisper_model(model_name)
 
+        # カスタム辞書の設定（引数で渡された場合は上書き）
+        initial_prompt = custom_vocabulary if custom_vocabulary else self._custom_vocabulary
+
         self._report_progress('transcribing', 0, '文字起こし中...')
 
         try:
-            result = self._whisper_model.transcribe(
-                audio_path,
-                language=language if language != 'auto' else None,
-                verbose=False
-            )
+            # kotoba-whisperを使う場合
+            if self._use_kotoba:
+                return self._transcribe_with_kotoba(audio_path, language, initial_prompt)
 
-            segments = []
-            for seg in result.get('segments', []):
-                segments.append(TranscriptSegment(
-                    start=seg['start'],
-                    end=seg['end'],
-                    text=seg['text'].strip()
-                ))
+            # faster-whisperを使う場合
+            if self._engine == 'faster-whisper':
+                return self._transcribe_with_faster_whisper(audio_path, language, initial_prompt)
 
-            self._report_progress('completed', 100, '文字起こし完了')
-
-            filename = os.path.basename(audio_path)
-            return TranscriptResult(
-                video_title=os.path.splitext(filename)[0],
-                video_id='',
-                language=result.get('language', language),
-                segments=segments,
-                source='whisper'
-            )
+            # 標準openai-whisperを使う場合
+            return self._transcribe_with_openai_whisper(audio_path, language, initial_prompt)
 
         except Exception as e:
             self._report_progress('error', 0, f'文字起こしエラー: {str(e)}')
             raise
+
+    def _transcribe_with_openai_whisper(self, audio_path: str, language: str,
+                                         initial_prompt: str = '') -> TranscriptResult:
+        """標準openai-whisperで文字起こし"""
+        transcribe_options = {
+            'language': language if language != 'auto' else None,
+            'verbose': False,
+        }
+
+        # カスタム辞書（initial_prompt）を設定
+        if initial_prompt:
+            transcribe_options['initial_prompt'] = initial_prompt
+            logger.info(f"Using initial_prompt: {initial_prompt[:100]}...")
+
+        result = self._whisper_model.transcribe(audio_path, **transcribe_options)
+
+        segments = []
+        for seg in result.get('segments', []):
+            segments.append(TranscriptSegment(
+                start=seg['start'],
+                end=seg['end'],
+                text=seg['text'].strip()
+            ))
+
+        self._report_progress('completed', 100, '文字起こし完了')
+
+        filename = os.path.basename(audio_path)
+        return TranscriptResult(
+            video_title=os.path.splitext(filename)[0],
+            video_id='',
+            language=result.get('language', language),
+            segments=segments,
+            source='whisper'
+        )
+
+    def _transcribe_with_faster_whisper(self, audio_path: str, language: str,
+                                         initial_prompt: str = '') -> TranscriptResult:
+        """faster-whisperで文字起こし（高速）"""
+        transcribe_options = {
+            'language': language if language != 'auto' else None,
+            'beam_size': 5,
+        }
+
+        # カスタム辞書（initial_prompt）を設定
+        if initial_prompt:
+            transcribe_options['initial_prompt'] = initial_prompt
+            logger.info(f"Using initial_prompt for faster-whisper: {initial_prompt[:100]}...")
+
+        segments_iter, info = self._faster_whisper_model.transcribe(audio_path, **transcribe_options)
+
+        segments = []
+        for seg in segments_iter:
+            segments.append(TranscriptSegment(
+                start=seg.start,
+                end=seg.end,
+                text=seg.text.strip()
+            ))
+
+        self._report_progress('completed', 100, '文字起こし完了 (faster-whisper)')
+
+        filename = os.path.basename(audio_path)
+        return TranscriptResult(
+            video_title=os.path.splitext(filename)[0],
+            video_id='',
+            language=info.language if info else language,
+            segments=segments,
+            source='faster-whisper'
+        )
+
+    def _transcribe_with_kotoba(self, audio_path: str, language: str,
+                                 initial_prompt: str = '') -> TranscriptResult:
+        """kotoba-whisperで文字起こし（日本語特化）"""
+        generate_kwargs = {
+            'language': 'japanese',  # kotoba-whisperは日本語特化
+            'task': 'transcribe',
+        }
+
+        # initial_promptはkotoba-whisperでも使用可能
+        if initial_prompt:
+            generate_kwargs['prompt_ids'] = None  # kotoba uses different prompt handling
+            logger.info(f"Note: kotoba-whisper has limited initial_prompt support")
+
+        result = self._kotoba_pipeline(
+            audio_path,
+            return_timestamps=True,
+            generate_kwargs=generate_kwargs,
+        )
+
+        segments = []
+        chunks = result.get('chunks', [])
+        if chunks:
+            for chunk in chunks:
+                timestamps = chunk.get('timestamp', (0, 0))
+                start = timestamps[0] if timestamps[0] is not None else 0
+                end = timestamps[1] if timestamps[1] is not None else start + 1
+                segments.append(TranscriptSegment(
+                    start=start,
+                    end=end,
+                    text=chunk.get('text', '').strip()
+                ))
+        else:
+            # chunksがない場合は全体を1セグメントとして扱う
+            segments.append(TranscriptSegment(
+                start=0,
+                end=0,
+                text=result.get('text', '').strip()
+            ))
+
+        self._report_progress('completed', 100, '文字起こし完了 (kotoba-whisper)')
+
+        filename = os.path.basename(audio_path)
+        return TranscriptResult(
+            video_title=os.path.splitext(filename)[0],
+            video_id='',
+            language='ja',
+            segments=segments,
+            source='kotoba-whisper'
+        )
 
     def transcribe_youtube(self, url: str, language: str = 'ja',
                            model_name: str = 'base',
