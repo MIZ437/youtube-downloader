@@ -15,7 +15,7 @@ Set objShortcut = objShell.CreateShortcut(strDesktop & "\YouTube Downloader.lnk"
 objShortcut.TargetPath = strTarget
 objShortcut.WorkingDirectory = strPath
 objShortcut.Description = "YouTube Downloader"
-objShortcut.IconLocation = "shell32.dll,165"
+objShortcut.IconLocation = strPath & "\icon.ico,0"
 objShortcut.Save
 
 MsgBox "Desktop shortcut created!", vbInformation, "Complete"
