@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QStatusBar, QMenu, QMenuBar, QDialog, QMessageBox
 )
 from PyQt6.QtGui import QAction, QIcon
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QSettings, QSize
 
 from src.downloader import YouTubeDownloader
 from src.transcriber import Transcriber
@@ -57,12 +57,13 @@ class MainWindow(QMainWindow):
         else:
             app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-        # アイコンファイルを探して設定
+        # アイコンファイルを探して設定（複数サイズ）
         icon = QIcon()
         for icon_name in ['icon.ico', 'icon_d.png']:
             icon_path = os.path.join(app_dir, icon_name)
             if os.path.exists(icon_path):
-                icon.addFile(icon_path)
+                for size in [16, 24, 32, 48, 64, 128, 256]:
+                    icon.addFile(icon_path, QSize(size, size))
                 logger.debug(f"Window icon loaded: {icon_path}")
                 break
 

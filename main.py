@@ -23,7 +23,7 @@ if sys.platform == 'win32':
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt, QLocale
+from PyQt6.QtCore import Qt, QLocale, QSize
 from PyQt6.QtGui import QFont, QIcon
 
 from src.gui.main_window import MainWindow
@@ -43,12 +43,14 @@ def main():
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("YTDownloader")
 
-    # アプリケーションアイコン設定（複数形式を試す）
+    # アプリケーションアイコン設定（複数サイズで設定）
     icon = QIcon()
     for icon_name in ['icon.ico', 'icon_d.png']:
         icon_path = os.path.join(app_path, icon_name)
         if os.path.exists(icon_path):
-            icon.addFile(icon_path)
+            # 複数サイズでアイコンを追加
+            for size in [16, 24, 32, 48, 64, 128, 256]:
+                icon.addFile(icon_path, QSize(size, size))
             break
     if not icon.isNull():
         app.setWindowIcon(icon)
