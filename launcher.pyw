@@ -136,7 +136,7 @@ class LauncherApp:
         # FFmpegダウンロードボタン（初期は非表示）
         self.ffmpeg_btn = ttk.Button(
             self.button_frame,
-            text="FFmpegをダウンロード（約80MB）",
+            text="FFmpegをダウンロード（約180MB）",
             command=self.start_ffmpeg_download
         )
 
@@ -480,15 +480,27 @@ $Shortcut.Save()
                 self.show_error(f"main.pyが見つかりません:\n{main_script}")
                 return
 
-            pythonw = sys.executable.replace('python.exe', 'pythonw.exe')
-            if not os.path.exists(pythonw):
-                pythonw = sys.executable
-
-            subprocess.Popen(
-                [pythonw, main_script],
+            # python.exeで直接起動（エラーが見えるように）
+            # GUIアプリなので、Popenで起動してすぐランチャーを閉じる
+            process = subprocess.Popen(
+                [sys.executable, main_script],
                 cwd=APP_DIR,
+                stderr=subprocess.PIPE,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
             )
+
+            # 少し待ってエラーチェック
+            import time
+            time.sleep(2)
+
+            # プロセスが終了していたらエラー
+            if process.poll() is not None:
+                stderr = process.stderr.read().decode('utf-8', errors='ignore') if process.stderr else ''
+                if stderr:
+                    self.show_error(f"起動エラー:\n{stderr[:500]}")
+                else:
+                    self.show_error("アプリが起動直後に終了しました。")
+                return
 
             self.root.quit()
 
