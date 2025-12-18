@@ -463,10 +463,19 @@ $Shortcut.Save()
 
     def launch_app_with_message(self):
         """起動メッセージを表示してからアプリを起動"""
-        self.log("アプリを起動します...", 'info')
+        self.log("")
+        self.log("アプリを起動しています...", 'info')
+        self.log("しばらくお待ちください...", 'info')
         self.update_status("アプリを起動中...")
+
+        # ボタンを非表示にして「起動中」を強調
+        for widget in self.button_frame.winfo_children():
+            widget.pack_forget()
+
         self.root.update()
-        self.root.after(500, self.launch_app)
+
+        # 少し待ってから起動（UIが更新されるのを待つ）
+        self.root.after(300, self.launch_app)
 
     def launch_app(self):
         """メインアプリを起動"""
@@ -519,7 +528,11 @@ $Shortcut.Save()
                 )
 
                 log.write(f"Process started with PID: {process.pid}\n")
-                log.write("Launcher closing...\n")
+                log.write("Waiting for app to start...\n")
+
+            # アプリが起動するまで少し待つ（ユーザーに起動中を見せる）
+            import time
+            time.sleep(2)
 
             # ランチャーを閉じる
             self.root.quit()
