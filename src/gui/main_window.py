@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QTabWidget,
     QStatusBar, QMenu, QMenuBar, QDialog, QMessageBox
 )
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import QSettings
 
 from src.downloader import YouTubeDownloader
@@ -39,12 +39,31 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("YouTube Downloader")
         self.setMinimumSize(900, 700)
 
+        # ウィンドウアイコン設定
+        self._set_window_icon()
+
         self.downloader = YouTubeDownloader()
         self.transcriber = Transcriber()
 
         self.setup_ui()
         self.load_settings()
         self.setup_connections()
+
+    def _set_window_icon(self):
+        """ウィンドウアイコンを設定"""
+        # アプリケーションディレクトリを取得
+        if getattr(sys, 'frozen', False):
+            app_dir = os.path.dirname(sys.executable)
+        else:
+            app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+        # アイコンファイルを探す
+        for icon_name in ['icon.ico', 'icon_d.png']:
+            icon_path = os.path.join(app_dir, icon_name)
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+                logger.debug(f"Window icon set: {icon_path}")
+                break
 
     def setup_ui(self):
         """UIセットアップ"""
