@@ -32,18 +32,15 @@ REQUIRED_PACKAGES = [
     ('psutil', 'psutil'),
 ]
 
-# オプションパッケージ（高速化用、なくても動作可能）
-OPTIONAL_PACKAGES = [
-    ('faster_whisper', 'faster-whisper'),
-    ('transformers', 'transformers'),
-]
+# 初回セットアップ完了フラグファイル
+SETUP_COMPLETE_FLAG = os.path.join(APP_DIR, '.setup_complete')
 
 
 class LauncherApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("YouTube Downloader - セットアップ")
-        self.root.geometry("500x300")
+        self.root.title("YouTube Downloader")
+        self.root.geometry("520x350")
         self.root.resizable(False, False)
 
         # アイコン設定
@@ -53,6 +50,10 @@ class LauncherApp:
 
         # ウィンドウを中央に配置
         self.center_window()
+
+        # 状態管理
+        self.is_first_run = not os.path.exists(SETUP_COMPLETE_FLAG)
+        self.needs_install = False
 
         # UI構築
         self.setup_ui()
@@ -85,7 +86,7 @@ class LauncherApp:
         self.status_label = ttk.Label(
             main_frame,
             text="環境をチェック中...",
-            font=('Helvetica', 10)
+            font=('Helvetica', 11)
         )
         self.status_label.pack(pady=10)
 
@@ -93,23 +94,29 @@ class LauncherApp:
         self.progress = ttk.Progressbar(
             main_frame,
             mode='indeterminate',
-            length=400
+            length=420
         )
         self.progress.pack(pady=10)
         self.progress.start(10)
 
         # 詳細ログ
-        self.log_frame = ttk.LabelFrame(main_frame, text="詳細", padding="5")
+        self.log_frame = ttk.LabelFrame(main_frame, text="チェック状況", padding="5")
         self.log_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
         self.log_text = tk.Text(
             self.log_frame,
-            height=6,
-            width=55,
+            height=8,
+            width=60,
             state=tk.DISABLED,
             font=('Consolas', 9)
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
+
+        # タグ設定（色分け用）
+        self.log_text.tag_configure('ok', foreground='green')
+        self.log_text.tag_configure('missing', foreground='orange')
+        self.log_text.tag_configure('error', foreground='red')
+        self.log_text.tag_configure('info', foreground='blue')
 
         # ボタンフレーム
         self.button_frame = ttk.Frame(main_frame)
@@ -122,10 +129,13 @@ class LauncherApp:
         )
         self.cancel_btn.pack()
 
-    def log(self, message):
+    def log(self, message, tag=None):
         """ログを追加"""
         self.log_text.config(state=tk.NORMAL)
-        self.log_text.insert(tk.END, message + "\n")
+        if tag:
+            self.log_text.insert(tk.END, message + "\n", tag)
+        else:
+            self.log_text.insert(tk.END, message + "\n")
         self.log_text.see(tk.END)
         self.log_text.config(state=tk.DISABLED)
         self.root.update()
@@ -144,6 +154,18 @@ class LauncherApp:
         """パッケージがインストールされているか確認"""
         return importlib.util.find_spec(import_name) is not None
 
+    def check_ffmpeg_system(self):
+        """システムにFFmpegがインストールされているか確認"""
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            return False
+
     def install_package(self, pip_name):
         """パッケージをインストール"""
         try:
@@ -155,68 +177,140 @@ class LauncherApp:
             )
             return result.returncode == 0
         except Exception as e:
-            self.log(f"エラー: {e}")
+            self.log(f"エラー: {e}", 'error')
             return False
 
     def check_and_install(self):
         """依存関係をチェックしてインストール"""
         try:
+            self.update_status("必要なファイルを確認中...")
+            self.log("=== 環境チェック開始 ===\n")
+
             # 必須パッケージのチェック
             missing_required = []
-            self.update_status("必須パッケージをチェック中...")
+            installed_count = 0
 
             for import_name, pip_name in REQUIRED_PACKAGES:
-                self.log(f"チェック: {pip_name}")
-                if not self.check_package(import_name):
-                    missing_required.append((import_name, pip_name))
-                    self.log(f"  → 未インストール")
+                if self.check_package(import_name):
+                    self.log(f"  [OK] {pip_name}", 'ok')
+                    installed_count += 1
                 else:
-                    self.log(f"  → OK")
+                    self.log(f"  [未] {pip_name} - インストールが必要", 'missing')
+                    missing_required.append((import_name, pip_name))
 
-            # 必須パッケージのインストール
+            # FFmpegチェック
+            ffmpeg_app_path = os.path.join(APP_DIR, 'ffmpeg', 'ffmpeg.exe')
+            ffmpeg_in_app = os.path.exists(ffmpeg_app_path)
+            ffmpeg_in_system = self.check_ffmpeg_system()
+
+            if ffmpeg_in_app or ffmpeg_in_system:
+                location = "アプリフォルダ" if ffmpeg_in_app else "システム"
+                self.log(f"  [OK] FFmpeg ({location})", 'ok')
+            else:
+                self.log(f"  [未] FFmpeg - 初回起動時に自動ダウンロード", 'missing')
+
+            # 結果サマリー
+            self.log("")
             if missing_required:
-                self.update_status("必須パッケージをインストール中...")
-                self.log("\n--- インストール開始 ---")
+                self.needs_install = True
+                self.log(f"結果: {len(missing_required)}個のパッケージをインストールします", 'info')
+                self.log("")
 
-                for import_name, pip_name in missing_required:
-                    self.log(f"インストール中: {pip_name}")
+                # インストール実行
+                self.update_status("必要なパッケージをインストール中...")
+
+                for i, (import_name, pip_name) in enumerate(missing_required):
+                    self.update_status(f"インストール中: {pip_name} ({i+1}/{len(missing_required)})")
+                    self.log(f"インストール中: {pip_name}...")
+
                     if self.install_package(pip_name):
-                        self.log(f"  → 成功")
+                        self.log(f"  → 完了", 'ok')
                     else:
-                        self.log(f"  → 失敗")
+                        self.log(f"  → 失敗", 'error')
                         self.show_error(f"{pip_name}のインストールに失敗しました。\n手動でインストールしてください。")
                         return
 
-            # オプションパッケージのチェック（インストールは促すのみ）
-            self.update_status("オプションパッケージをチェック中...")
-            missing_optional = []
-
-            for import_name, pip_name in OPTIONAL_PACKAGES:
-                if not self.check_package(import_name):
-                    missing_optional.append(pip_name)
-
-            if missing_optional:
-                self.log(f"\nオプション（高速化）: {', '.join(missing_optional)}")
-                self.log("※ 設定画面から後でインストール可能")
-
-            # FFmpegチェック
-            self.update_status("FFmpegをチェック中...")
-            ffmpeg_path = os.path.join(APP_DIR, 'ffmpeg', 'ffmpeg.exe')
-            if os.path.exists(ffmpeg_path):
-                self.log("\nFFmpeg: OK")
+                self.log("")
+                self.log("全てのパッケージをインストールしました", 'ok')
             else:
-                self.log("\nFFmpeg: 未セットアップ（初回起動時に自動ダウンロード）")
+                self.log("結果: 全ての必須パッケージがインストール済みです", 'ok')
 
             # 完了
             self.progress.stop()
-            self.update_status("準備完了！アプリケーションを起動します...")
-            self.log("\n--- セットアップ完了 ---")
 
-            # 少し待ってからアプリ起動
-            self.root.after(1500, self.launch_app)
+            # 初回セットアップの場合、デスクトップショートカットを確認
+            if self.is_first_run:
+                self.root.after(500, self.ask_desktop_shortcut)
+            else:
+                self.update_status("起動中...")
+                self.root.after(800, self.launch_app)
 
         except Exception as e:
             self.show_error(f"エラーが発生しました:\n{str(e)}")
+
+    def ask_desktop_shortcut(self):
+        """デスクトップショートカット作成を確認"""
+        result = messagebox.askyesno(
+            "初回セットアップ",
+            "デスクトップにショートカットを作成しますか？\n\n"
+            "作成すると、次回からデスクトップのアイコンから起動できます。"
+        )
+
+        if result:
+            self.create_desktop_shortcut()
+
+        # セットアップ完了フラグを作成
+        try:
+            with open(SETUP_COMPLETE_FLAG, 'w') as f:
+                f.write('setup complete')
+        except:
+            pass
+
+        self.update_status("起動中...")
+        self.root.after(500, self.launch_app)
+
+    def create_desktop_shortcut(self):
+        """デスクトップショートカットを作成"""
+        try:
+            if sys.platform != 'win32':
+                return
+
+            # VBScriptを使ってショートカット作成
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            shortcut_path = os.path.join(desktop, "YouTube Downloader.lnk")
+            target_path = os.path.join(APP_DIR, "YouTubeDownloader.vbs")
+            icon_path = os.path.join(APP_DIR, "icon.ico")
+
+            vbs_script = f'''
+Set objShell = CreateObject("WScript.Shell")
+Set objShortcut = objShell.CreateShortcut("{shortcut_path}")
+objShortcut.TargetPath = "{target_path}"
+objShortcut.WorkingDirectory = "{APP_DIR}"
+objShortcut.Description = "YouTube Downloader"
+objShortcut.IconLocation = "{icon_path},0"
+objShortcut.Save
+'''
+            # 一時VBSファイルを作成して実行
+            temp_vbs = os.path.join(APP_DIR, '_create_shortcut_temp.vbs')
+            with open(temp_vbs, 'w', encoding='utf-8') as f:
+                f.write(vbs_script)
+
+            subprocess.run(
+                ['wscript', temp_vbs],
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+
+            # 一時ファイル削除
+            try:
+                os.remove(temp_vbs)
+            except:
+                pass
+
+            self.log("")
+            self.log("デスクトップにショートカットを作成しました", 'ok')
+
+        except Exception as e:
+            self.log(f"ショートカット作成に失敗: {e}", 'error')
 
     def launch_app(self):
         """メインアプリを起動"""

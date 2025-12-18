@@ -18,7 +18,6 @@ INCLUDE_FILES = [
     'main.py',
     'launcher.pyw',
     'YouTubeDownloader.vbs',
-    'CreateShortcut.vbs',
     'icon.ico',
     'icon_d.png',
     'requirements.txt',
