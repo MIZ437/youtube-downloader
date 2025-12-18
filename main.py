@@ -292,6 +292,15 @@ def main():
     window.show()
     write_log("Window shown")
 
+    # ランチャーに起動完了を通知（信号ファイル作成）
+    try:
+        ready_file = os.path.join(app_path, '.app_ready')
+        with open(ready_file, 'w') as f:
+            f.write('ready')
+        write_log("Ready signal created")
+    except:
+        pass
+
     # Windows: ウィンドウ表示後にWin32 APIでアイコンを設定（より確実）
     if sys.platform == 'win32':
         def apply_win32_icon():

@@ -528,11 +528,25 @@ $Shortcut.Save()
                 )
 
                 log.write(f"Process started with PID: {process.pid}\n")
-                log.write("Waiting for app to start...\n")
+                log.write("Waiting for app ready signal...\n")
 
-            # アプリが起動するまで少し待つ（ユーザーに起動中を見せる）
+            # アプリが起動完了するまで待機（最大30秒）
             import time
-            time.sleep(2)
+            ready_file = os.path.join(APP_DIR, '.app_ready')
+
+            # 古い信号ファイルがあれば削除
+            if os.path.exists(ready_file):
+                os.remove(ready_file)
+
+            for i in range(60):  # 最大30秒（0.5秒 x 60回）
+                if os.path.exists(ready_file):
+                    # 信号ファイルを削除してランチャーを閉じる
+                    try:
+                        os.remove(ready_file)
+                    except:
+                        pass
+                    break
+                time.sleep(0.5)
 
             # ランチャーを閉じる
             self.root.quit()
