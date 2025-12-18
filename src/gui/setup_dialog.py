@@ -36,8 +36,8 @@ class SetupDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("初回セットアップ")
-        self.setFixedSize(450, 200)
+        self.setWindowTitle("FFmpegセットアップ")
+        self.setFixedSize(480, 220)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         self.worker = None
         self.setup_success = False
@@ -49,14 +49,16 @@ class SetupDialog(QDialog):
 
         # 説明
         info_label = QLabel(
-            "YouTube Downloaderを使用するにはFFmpegが必要です。\n"
-            "自動的にダウンロードしてセットアップします。"
+            "動画のダウンロードに必要な「FFmpeg」が見つかりませんでした。\n\n"
+            "「ダウンロードしてセットアップ」をクリックすると、\n"
+            "自動的にFFmpegをダウンロードしてセットアップします。\n"
+            "（約80MB、数分かかる場合があります）"
         )
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(info_label)
 
         # ステータス
-        self.status_label = QLabel("準備完了")
+        self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.status_label)
 
@@ -65,17 +67,18 @@ class SetupDialog(QDialog):
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
         # ボタン
         button_layout = QHBoxLayout()
 
-        self.setup_btn = QPushButton("セットアップ開始")
+        self.setup_btn = QPushButton("ダウンロードしてセットアップ")
         self.setup_btn.setMinimumHeight(35)
         self.setup_btn.clicked.connect(self.start_setup)
         button_layout.addWidget(self.setup_btn)
 
-        self.skip_btn = QPushButton("スキップ")
+        self.skip_btn = QPushButton("後で")
         self.skip_btn.setMinimumHeight(35)
         self.skip_btn.clicked.connect(self.skip_setup)
         button_layout.addWidget(self.skip_btn)
@@ -87,6 +90,8 @@ class SetupDialog(QDialog):
         self.setup_btn.setEnabled(False)
         self.skip_btn.setEnabled(False)
         self.progress_bar.setValue(0)
+        self.progress_bar.setVisible(True)
+        self.status_label.setText("ダウンロードを開始しています...")
 
         self.worker = FFmpegSetupWorker()
         self.worker.progress.connect(self.on_progress)
@@ -129,8 +134,10 @@ class SetupDialog(QDialog):
         """スキップ"""
         reply = QMessageBox.question(
             self, "確認",
-            "FFmpegがないと動画のダウンロードに失敗する場合があります。\n"
-            "本当にスキップしますか?",
+            "FFmpegがないと以下の機能が使えません:\n"
+            "・動画のダウンロード（音声と映像の結合）\n"
+            "・一部の文字起こし機能\n\n"
+            "後からでもダウンロードできます。スキップしますか？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )

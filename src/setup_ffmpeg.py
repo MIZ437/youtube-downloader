@@ -35,22 +35,46 @@ def get_ffmpeg_dir() -> str:
 
 def is_ffmpeg_installed() -> bool:
     """FFmpegがインストールされているか確認"""
-    # アプリフォルダ内のFFmpegを確認
+    # 1. アプリフォルダ内のFFmpegを確認
     ffmpeg_dir = get_ffmpeg_dir()
     ffmpeg_exe = os.path.join(ffmpeg_dir, "ffmpeg.exe")
     if os.path.exists(ffmpeg_exe):
+        logger.info(f"FFmpeg found in app folder: {ffmpeg_exe}")
         return True
 
-    # システムPATHを確認
+    # 2. shutil.whichでPATHを確認（より確実）
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        logger.info(f"FFmpeg found in PATH: {ffmpeg_path}")
+        return True
+
+    # 3. 一般的なインストール場所を確認
+    common_locations = [
+        r"C:\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+        r"C:\Program Files (x86)\ffmpeg\bin\ffmpeg.exe",
+        os.path.expanduser(r"~\ffmpeg\bin\ffmpeg.exe"),
+    ]
+    for location in common_locations:
+        if os.path.exists(location):
+            logger.info(f"FFmpeg found at common location: {location}")
+            return True
+
+    # 4. subprocessで確認（フォールバック）
     try:
         result = subprocess.run(
             ["ffmpeg", "-version"],
             capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         )
-        return result.returncode == 0
+        if result.returncode == 0:
+            logger.info("FFmpeg found via subprocess")
+            return True
     except FileNotFoundError:
-        return False
+        pass
+
+    logger.info("FFmpeg not found")
+    return False
 
 
 def download_ffmpeg(progress_callback: Optional[Callable[[int, int], None]] = None) -> str:
