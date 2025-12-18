@@ -57,13 +57,18 @@ class MainWindow(QMainWindow):
         else:
             app_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-        # アイコンファイルを探す
+        # アイコンファイルを探して設定
+        icon = QIcon()
         for icon_name in ['icon.ico', 'icon_d.png']:
             icon_path = os.path.join(app_dir, icon_name)
             if os.path.exists(icon_path):
-                self.setWindowIcon(QIcon(icon_path))
-                logger.debug(f"Window icon set: {icon_path}")
+                icon.addFile(icon_path)
+                logger.debug(f"Window icon loaded: {icon_path}")
                 break
+
+        if not icon.isNull():
+            self.setWindowIcon(icon)
+            logger.debug("Window icon set successfully")
 
     def setup_ui(self):
         """UIセットアップ"""

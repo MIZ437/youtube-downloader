@@ -54,8 +54,8 @@ class LauncherApp:
         # ウィンドウを中央に配置
         self.center_window()
 
-        # 状態管理: フラグファイルまたはショートカットが存在すれば初回ではない
-        self.is_first_run = not (os.path.exists(SETUP_COMPLETE_FLAG) or os.path.exists(DESKTOP_SHORTCUT))
+        # 状態管理: フラグファイルのみで判断（ショートカットは別途チェック）
+        self.is_first_run = not os.path.exists(SETUP_COMPLETE_FLAG)
         self.needs_install = False
 
         # UI構築
@@ -259,14 +259,17 @@ class LauncherApp:
 
     def ask_desktop_shortcut(self):
         """デスクトップショートカット作成を確認"""
-        result = messagebox.askyesno(
-            "初回セットアップ",
-            "デスクトップにショートカットを作成しますか？\n\n"
-            "作成すると、次回からデスクトップのアイコンから起動できます。"
-        )
-
-        if result:
-            self.create_desktop_shortcut()
+        # 既にショートカットが存在する場合はスキップ
+        if os.path.exists(DESKTOP_SHORTCUT):
+            self.log("デスクトップショートカット: 既に存在します", 'ok')
+        else:
+            result = messagebox.askyesno(
+                "初回セットアップ",
+                "デスクトップにショートカットを作成しますか？\n\n"
+                "作成すると、次回からデスクトップのアイコンから起動できます。"
+            )
+            if result:
+                self.create_desktop_shortcut()
 
         # セットアップ完了フラグを作成
         try:

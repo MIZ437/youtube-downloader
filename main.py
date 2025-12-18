@@ -43,10 +43,15 @@ def main():
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("YTDownloader")
 
-    # アプリケーションアイコン設定
-    icon_path = os.path.join(app_path, "icon.ico")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
+    # アプリケーションアイコン設定（複数形式を試す）
+    icon = QIcon()
+    for icon_name in ['icon.ico', 'icon_d.png']:
+        icon_path = os.path.join(app_path, icon_name)
+        if os.path.exists(icon_path):
+            icon.addFile(icon_path)
+            break
+    if not icon.isNull():
+        app.setWindowIcon(icon)
 
     # FFmpegチェック・セットアップ
     check_and_setup_ffmpeg()
