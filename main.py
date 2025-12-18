@@ -19,15 +19,61 @@ sys.path.insert(0, app_path)
 # Windows: タスクバーアイコン用にAppUserModelIDを設定
 if sys.platform == 'win32':
     import ctypes
+    from ctypes import wintypes
+
     myappid = 'YTDownloader.YouTubeDownloader.1.0'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
-from PyQt6.QtWidgets import QApplication, QMessageBox
-from PyQt6.QtCore import Qt, QLocale, QSize
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt, QSize, QTimer
 from PyQt6.QtGui import QFont, QIcon
 
 from src.gui.main_window import MainWindow
-from src.gui.setup_dialog import check_and_setup_ffmpeg
+
+
+def set_window_icon_win32(hwnd, icon_path):
+    """Windows APIを使用してウィンドウアイコンを設定"""
+    if sys.platform != 'win32' or not os.path.exists(icon_path):
+        return
+
+    try:
+        # Windows API定数
+        WM_SETICON = 0x0080
+        ICON_SMALL = 0
+        ICON_BIG = 1
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x0010
+        LR_DEFAULTSIZE = 0x0040
+
+        # user32.dllの関数を取得
+        user32 = ctypes.windll.user32
+
+        # LoadImageW関数でアイコンを読み込み
+        LoadImageW = user32.LoadImageW
+        LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+                               ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        LoadImageW.restype = wintypes.HANDLE
+
+        # 大きいアイコン (32x32 or 48x48) をタスクバー用に読み込み
+        hicon_big = LoadImageW(None, icon_path, IMAGE_ICON, 48, 48, LR_LOADFROMFILE)
+        if not hicon_big:
+            hicon_big = LoadImageW(None, icon_path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+
+        # 小さいアイコン (16x16) をタイトルバー用に読み込み
+        hicon_small = LoadImageW(None, icon_path, IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+
+        # SendMessageでアイコンを設定
+        SendMessageW = user32.SendMessageW
+        SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        SendMessageW.restype = wintypes.LPARAM
+
+        if hicon_big:
+            SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
+        if hicon_small:
+            SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
+
+    except Exception as e:
+        print(f"Failed to set window icon via Win32 API: {e}")
 
 
 def main():
@@ -54,9 +100,6 @@ def main():
             break
     if not icon.isNull():
         app.setWindowIcon(icon)
-
-    # FFmpegチェック・セットアップ
-    check_and_setup_ffmpeg()
 
     # 日本語フォント設定
     font = QFont("Meiryo UI", 9)
@@ -203,6 +246,17 @@ def main():
     # メインウィンドウ表示
     window = MainWindow()
     window.show()
+
+    # Windows: ウィンドウ表示後にWin32 APIでアイコンを設定（より確実）
+    if sys.platform == 'win32':
+        def apply_win32_icon():
+            hwnd = int(window.winId())
+            icon_path = os.path.join(app_path, 'icon.ico')
+            if os.path.exists(icon_path):
+                set_window_icon_win32(hwnd, icon_path)
+
+        # ウィンドウが完全に表示された後に適用（100ms後）
+        QTimer.singleShot(100, apply_win32_icon)
 
     sys.exit(app.exec())
 
