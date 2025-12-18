@@ -140,6 +140,11 @@ class TranscribeTab(QWidget):
         self.transcribe_model_combo.setCurrentIndex(1)  # base をデフォルト
         model_layout.addWidget(model_label)
         model_layout.addWidget(self.transcribe_model_combo)
+        # kotoba-whisper使用時の但し書き
+        self.model_note_label = QLabel("※kotoba-whisper使用時は無効")
+        self.model_note_label.setStyleSheet("color: gray; font-size: 10px;")
+        self.model_note_label.setVisible(False)
+        model_layout.addWidget(self.model_note_label)
         top_options_layout.addLayout(model_layout)
 
         # オプションチェック
@@ -153,7 +158,7 @@ class TranscribeTab(QWidget):
 
         # 下段: カスタム辞書入力（精度向上）
         vocab_layout = QHBoxLayout()
-        vocab_label = QLabel("追加辞書（読点「、」/カンマ「,」区切り）:")
+        vocab_label = QLabel("追加辞書（読点「、」またはカンマ「,」区切り）:")
         self.custom_vocab_input = QLineEdit()
         self.custom_vocab_input.setPlaceholderText("例: YouTube, Whisper, 固有名詞...")
         vocab_layout.addWidget(vocab_label)
@@ -206,6 +211,22 @@ class TranscribeTab(QWidget):
         result_group.setLayout(result_layout)
         layout.addWidget(result_group)
 
+        # 設定に基づいてUIを更新
+        self.update_model_ui_state()
+
+    def update_model_ui_state(self):
+        """設定に基づいてWhisperモデル選択のUI状態を更新"""
+        settings = QSettings("YTDownloader", "Settings")
+        engine_idx = settings.value("whisper_engine", 0, type=int)
+        is_kotoba = (engine_idx == 2)
+
+        self.transcribe_model_combo.setEnabled(not is_kotoba)
+        self.model_note_label.setVisible(is_kotoba)
+        if is_kotoba:
+            self.transcribe_model_combo.setStyleSheet("background-color: #e0e0e0; color: #888888;")
+        else:
+            self.transcribe_model_combo.setStyleSheet("")
+
     def browse_transcribe_file(self):
         """文字起こし用ファイルを選択（複数可）"""
         file_paths, _ = QFileDialog.getOpenFileNames(
@@ -249,6 +270,9 @@ class TranscribeTab(QWidget):
 
     def start_transcribe(self):
         """文字起こし開始"""
+        # 設定に基づいてUIを更新（設定変更後に反映）
+        self.update_model_ui_state()
+
         input_type = self.input_type_group.checkedId()
         is_file = input_type == 2
 
@@ -278,10 +302,13 @@ class TranscribeTab(QWidget):
         # 設定から精度向上オプションを読み込み
         settings = QSettings("YTDownloader", "Settings")
         engine_idx = settings.value("whisper_engine", 0, type=int)
-        engine_map = {0: 'openai-whisper', 1: 'faster-whisper'}
+        # 0: 標準Whisper, 1: Faster Whisper, 2: kotoba-whisper
+        engine_map = {0: 'openai-whisper', 1: 'faster-whisper', 2: 'kotoba-whisper'}
         whisper_engine = engine_map.get(engine_idx, 'openai-whisper')
 
-        use_kotoba = settings.value("use_kotoba", False, type=bool)
+        # kotoba-whisperかどうか判定
+        use_kotoba = (engine_idx == 2)
+
         saved_vocabulary = settings.value("custom_vocabulary", "", type=str)
 
         # 画面入力のカスタム辞書と設定の辞書を結合

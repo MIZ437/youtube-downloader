@@ -128,6 +128,9 @@ class MainWindow(QMainWindow):
         # スペースタブからの文字起こし要求
         self.spaces_tab.transcribe_requested.connect(self.on_spaces_transcribe_requested)
 
+        # ダウンロードタブからの文字起こし要求
+        self.download_tab.transcribe_requested.connect(self.on_download_transcribe_requested)
+
     def load_settings(self):
         """設定を読み込み"""
         settings = QSettings("YTDownloader", "Settings")
@@ -152,6 +155,13 @@ class MainWindow(QMainWindow):
 
     def on_spaces_transcribe_requested(self, file_path: str):
         """スペースダウンロード後の文字起こし要求"""
+        # 文字起こしタブに移動して実行
+        self.transcribe_tab.set_file_for_transcribe(file_path)
+        self.tab_widget.setCurrentIndex(3)  # 文字起こしタブ
+        self.transcribe_tab.start_transcribe()
+
+    def on_download_transcribe_requested(self, file_path: str):
+        """YouTubeダウンロード後の文字起こし要求"""
         # 文字起こしタブに移動して実行
         self.transcribe_tab.set_file_for_transcribe(file_path)
         self.tab_widget.setCurrentIndex(3)  # 文字起こしタブ

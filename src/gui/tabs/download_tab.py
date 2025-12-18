@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QLabel, QTextEdit, QComboBox, QCheckBox,
     QProgressBar, QPushButton, QLineEdit, QFileDialog, QMessageBox
 )
+from PyQt6.QtCore import pyqtSignal
 
 from src.gui.utils import style_combobox
 from src.gui.workers import DownloadWorker
@@ -19,6 +20,9 @@ from src.downloader import YouTubeDownloader, extract_urls_from_text
 
 class DownloadTab(QWidget):
     """ダウンロードタブ"""
+
+    # 文字起こし開始シグナル（ファイルパスを親に送信）
+    transcribe_requested = pyqtSignal(str)
 
     def __init__(self, downloader: YouTubeDownloader, parent=None):
         super().__init__(parent)
@@ -32,6 +36,8 @@ class DownloadTab(QWidget):
         # URL入力エリア
         url_group = QGroupBox("URL入力")
         url_layout = QVBoxLayout()
+        url_layout.setContentsMargins(10, 5, 10, 5)  # 上下の余白を縮小
+        url_layout.setSpacing(5)  # 要素間のスペースを縮小
 
         url_label = QLabel("YouTubeのURLを入力（複数の場合は改行区切り）:")
         url_layout.addWidget(url_label)
@@ -43,7 +49,7 @@ class DownloadTab(QWidget):
             "https://youtu.be/...\n"
             "または再生リストURL"
         )
-        self.url_input.setMaximumHeight(100)
+        self.url_input.setMaximumHeight(80)  # 高さを少し縮小
         url_layout.addWidget(self.url_input)
 
         url_group.setLayout(url_layout)
@@ -251,10 +257,10 @@ class DownloadTab(QWidget):
             for e in error_results:
                 self.download_log.append(f"  {e}")
 
-        # 文字起こしも実行
+        # 文字起こしも実行（最初の成功ファイルのみ）
         if self.transcribe_check.isChecked() and len(success_files) > 0:
             self.download_log.append("\n文字起こしを開始します...")
-            # TODO: バッチ文字起こし実装
+            self.transcribe_requested.emit(success_files[0])
 
         QMessageBox.information(self, "完了",
             f"ダウンロードが完了しました\n成功: {len(success_files)}件\n失敗: {len(error_results)}件")

@@ -82,6 +82,12 @@ class SettingsDialog(QDialog):
         self.whisper_model_combo.setCurrentIndex(1)
         transcribe_layout.addRow("Whisperモデル:", self.whisper_model_combo)
 
+        # kotoba-whisper使用時の但し書き
+        self.model_note_label = QLabel("※kotoba-whisper使用時は無効")
+        self.model_note_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self.model_note_label.setVisible(False)
+        transcribe_layout.addRow("", self.model_note_label)
+
         self.default_lang_combo = QComboBox()
         style_combobox(self.default_lang_combo)
         self.default_lang_combo.addItems(["日本語 (ja)", "英語 (en)", "自動検出 (auto)"])
@@ -102,18 +108,17 @@ class SettingsDialog(QDialog):
         self.whisper_engine_combo = QComboBox()
         style_combobox(self.whisper_engine_combo)
         self.whisper_engine_combo.addItems([
-            "標準 Whisper（安定性重視）",
-            "Faster Whisper（2-4倍高速）"
+            "標準 Whisper（OpenAI公式版）",
+            "Faster Whisper（標準の2-4倍高速・精度同等）",
+            "kotoba-whisper（日本語特化・高精度・速度は標準並み）"
         ])
-        accuracy_layout.addRow("エンジン:", self.whisper_engine_combo)
-
-        # kotoba-whisperオプション
-        self.use_kotoba_check = QCheckBox("kotoba-whisper使用（日本語特化・高精度）")
-        self.use_kotoba_check.setToolTip(
-            "日本語に特化したWhisperモデルを使用します。\n"
-            "初回使用時にモデルのダウンロードが必要です（約3GB）。"
+        self.whisper_engine_combo.setToolTip(
+            "標準 Whisper: OpenAI公式実装\n"
+            "Faster Whisper: 高速化版（初回使用時にモデルダウンロード）\n"
+            "kotoba-whisper: 日本語特化版（初回使用時に約3GBダウンロード）"
         )
-        accuracy_layout.addRow("", self.use_kotoba_check)
+        self.whisper_engine_combo.currentIndexChanged.connect(self.on_engine_changed)
+        accuracy_layout.addRow("エンジン:", self.whisper_engine_combo)
 
         # カスタム辞書（用語リスト）
         vocab_label = QLabel("カスタム辞書（読点「、」またはカンマ「,」区切り）:")
@@ -147,6 +152,19 @@ class SettingsDialog(QDialog):
         if dir_path:
             self.output_dir_edit.setText(dir_path)
 
+    def on_engine_changed(self, index):
+        """エンジン選択変更時の処理"""
+        # kotoba-whisper(index=2)選択時はWhisperモデル選択を無効化
+        is_kotoba = (index == 2)
+        self.whisper_model_combo.setEnabled(not is_kotoba)
+        self.model_note_label.setVisible(is_kotoba)
+        if is_kotoba:
+            self.whisper_model_combo.setToolTip("kotoba-whisperは固定モデルを使用するため選択不可")
+            self.whisper_model_combo.setStyleSheet("background-color: #e0e0e0; color: #888888;")
+        else:
+            self.whisper_model_combo.setToolTip("")
+            self.whisper_model_combo.setStyleSheet("")
+
     def load_settings(self):
         settings = QSettings("YTDownloader", "Settings")
         self.output_dir_edit.setText(settings.value("output_dir", os.path.expanduser("~/Downloads")))
@@ -157,8 +175,9 @@ class SettingsDialog(QDialog):
         self.prefer_youtube_check.setChecked(settings.value("prefer_youtube", True, type=bool))
 
         # 精度向上設定
-        self.whisper_engine_combo.setCurrentIndex(settings.value("whisper_engine", 0, type=int))
-        self.use_kotoba_check.setChecked(settings.value("use_kotoba", False, type=bool))
+        engine_idx = settings.value("whisper_engine", 0, type=int)
+        self.whisper_engine_combo.setCurrentIndex(engine_idx)
+        self.on_engine_changed(engine_idx)  # UIの状態を更新
         self.custom_vocabulary_edit.setPlainText(settings.value("custom_vocabulary", "", type=str))
 
     def save_settings(self):
@@ -172,7 +191,6 @@ class SettingsDialog(QDialog):
 
         # 精度向上設定
         settings.setValue("whisper_engine", self.whisper_engine_combo.currentIndex())
-        settings.setValue("use_kotoba", self.use_kotoba_check.isChecked())
         settings.setValue("custom_vocabulary", self.custom_vocabulary_edit.toPlainText())
 
         self.accept()
