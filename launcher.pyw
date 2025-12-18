@@ -274,12 +274,12 @@ class LauncherApp:
             else:
                 self.packages_ok = True
 
-            # 完了処理
-            self.progress.stop()
-            self.show_result()
+            # 完了処理（メインスレッドで実行）
+            self.root.after(0, self.progress.stop)
+            self.root.after(100, self.show_result)
 
         except Exception as e:
-            self.show_error(f"エラーが発生しました:\n{str(e)}")
+            self.root.after(0, lambda: self.show_error(f"エラーが発生しました:\n{str(e)}"))
 
     def should_ask_shortcut(self):
         """ショートカット作成を確認すべきか判定"""
@@ -291,13 +291,15 @@ class LauncherApp:
         if self.packages_ok and self.ffmpeg_ok:
             self.log("=== 全ての準備が完了しました ===", 'ok')
             self.update_status("準備完了！")
+            self.root.update()
 
             # 初回かつショートカットが存在しない場合は確認
             if self.should_ask_shortcut():
-                self.root.after(500, self.ask_desktop_shortcut)
+                # 直接呼び出し（遅延なし）
+                self.ask_desktop_shortcut()
             else:
-                # 自動起動
-                self.root.after(500, self.launch_app_with_message)
+                # 直接起動
+                self.launch_app_with_message()
 
         elif self.packages_ok and not self.ffmpeg_ok:
             self.log("=== FFmpegのセットアップが必要です ===", 'info')
@@ -391,12 +393,13 @@ class LauncherApp:
         """FFmpegダウンロード完了後の処理"""
         self.ffmpeg_btn.pack_forget()
         self.launch_btn.config(text="アプリを起動", state=tk.NORMAL)
+        self.root.update()
 
         # 初回かつショートカットが存在しない場合は確認
         if self.should_ask_shortcut():
-            self.root.after(500, self.ask_desktop_shortcut)
+            self.ask_desktop_shortcut()
         else:
-            self.root.after(500, self.launch_app_with_message)
+            self.launch_app_with_message()
 
     def ask_desktop_shortcut(self):
         """デスクトップショートカット作成を確認"""
