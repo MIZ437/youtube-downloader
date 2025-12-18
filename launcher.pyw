@@ -205,12 +205,13 @@ class LauncherApp:
             ffmpeg_app_path = os.path.join(APP_DIR, 'ffmpeg', 'ffmpeg.exe')
             ffmpeg_in_app = os.path.exists(ffmpeg_app_path)
             ffmpeg_in_system = self.check_ffmpeg_system()
+            ffmpeg_ok = ffmpeg_in_app or ffmpeg_in_system
 
-            if ffmpeg_in_app or ffmpeg_in_system:
+            if ffmpeg_ok:
                 location = "アプリフォルダ" if ffmpeg_in_app else "システム"
                 self.log(f"  [OK] FFmpeg ({location})", 'ok')
             else:
-                self.log(f"  [未] FFmpeg - 初回起動時に自動ダウンロード", 'missing')
+                self.log(f"  [未] FFmpeg", 'missing')
 
             # 結果サマリー
             self.log("")
@@ -234,9 +235,14 @@ class LauncherApp:
                         return
 
                 self.log("")
-                self.log("全てのパッケージをインストールしました", 'ok')
-            else:
-                self.log("結果: 全ての必須パッケージがインストール済みです", 'ok')
+                self.log("Pythonパッケージのインストール完了", 'ok')
+
+            # 最終結果
+            if not missing_required and ffmpeg_ok:
+                self.log("結果: 全て準備完了！", 'ok')
+            elif not missing_required and not ffmpeg_ok:
+                self.log("結果: FFmpegのセットアップが必要です", 'info')
+                self.log("　　　（次の画面でダウンロードできます）", 'info')
 
             # 完了
             self.progress.stop()
