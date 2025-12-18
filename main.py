@@ -16,19 +16,44 @@ else:
 
 sys.path.insert(0, app_path)
 
+# デバッグ用ログ
+def write_log(message):
+    try:
+        log_path = os.path.join(app_path, 'main_debug.log')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"{message}\n")
+    except:
+        pass
+
+write_log("=== main.py started ===")
+
 # Windows: タスクバーアイコン用にAppUserModelIDを設定
 if sys.platform == 'win32':
+    write_log("Setting AppUserModelID...")
     import ctypes
     from ctypes import wintypes
 
     myappid = 'YTDownloader.YouTubeDownloader.1.0'
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+    write_log("AppUserModelID set")
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import Qt, QSize, QTimer
-from PyQt6.QtGui import QFont, QIcon
+write_log("Importing PyQt6...")
+try:
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import Qt, QSize, QTimer
+    from PyQt6.QtGui import QFont, QIcon
+    write_log("PyQt6 imported successfully")
+except Exception as e:
+    write_log(f"PyQt6 import error: {e}")
+    raise
 
-from src.gui.main_window import MainWindow
+write_log("Importing MainWindow...")
+try:
+    from src.gui.main_window import MainWindow
+    write_log("MainWindow imported successfully")
+except Exception as e:
+    write_log(f"MainWindow import error: {e}")
+    raise
 
 
 def set_window_icon_win32(hwnd, icon_path):
@@ -77,29 +102,40 @@ def set_window_icon_win32(hwnd, icon_path):
 
 
 def main():
-    # High DPI対応
-    QApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
+    write_log("main() started")
 
-    app = QApplication(sys.argv)
+    try:
+        # High DPI対応
+        write_log("Setting High DPI policy...")
+        QApplication.setHighDpiScaleFactorRoundingPolicy(
+            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+        )
 
-    # アプリケーション情報設定
-    app.setApplicationName("YouTube Downloader")
-    app.setApplicationVersion("1.0.0")
-    app.setOrganizationName("YTDownloader")
+        write_log("Creating QApplication...")
+        app = QApplication(sys.argv)
+        write_log("QApplication created")
 
-    # アプリケーションアイコン設定（複数サイズで設定）
-    icon = QIcon()
-    for icon_name in ['icon.ico', 'icon_d.png']:
-        icon_path = os.path.join(app_path, icon_name)
-        if os.path.exists(icon_path):
-            # 複数サイズでアイコンを追加
-            for size in [16, 24, 32, 48, 64, 128, 256]:
-                icon.addFile(icon_path, QSize(size, size))
-            break
-    if not icon.isNull():
-        app.setWindowIcon(icon)
+        # アプリケーション情報設定
+        app.setApplicationName("YouTube Downloader")
+        app.setApplicationVersion("1.0.0")
+        app.setOrganizationName("YTDownloader")
+
+        # アプリケーションアイコン設定（複数サイズで設定）
+        write_log("Setting application icon...")
+        icon = QIcon()
+        for icon_name in ['icon.ico', 'icon_d.png']:
+            icon_path = os.path.join(app_path, icon_name)
+            if os.path.exists(icon_path):
+                # 複数サイズでアイコンを追加
+                for size in [16, 24, 32, 48, 64, 128, 256]:
+                    icon.addFile(icon_path, QSize(size, size))
+                write_log(f"Icon loaded: {icon_path}")
+                break
+        if not icon.isNull():
+            app.setWindowIcon(icon)
+    except Exception as e:
+        write_log(f"Error in main() setup: {e}")
+        raise
 
     # 日本語フォント設定
     font = QFont("Meiryo UI", 9)
@@ -244,8 +280,17 @@ def main():
     app.setStyleSheet(stylesheet)
 
     # メインウィンドウ表示
-    window = MainWindow()
+    write_log("Creating MainWindow...")
+    try:
+        window = MainWindow()
+        write_log("MainWindow created")
+    except Exception as e:
+        write_log(f"Error creating MainWindow: {e}")
+        raise
+
+    write_log("Showing window...")
     window.show()
+    write_log("Window shown")
 
     # Windows: ウィンドウ表示後にWin32 APIでアイコンを設定（より確実）
     if sys.platform == 'win32':
@@ -258,8 +303,10 @@ def main():
         # ウィンドウが完全に表示された後に適用（100ms後）
         QTimer.singleShot(100, apply_win32_icon)
 
+    write_log("Starting event loop...")
     sys.exit(app.exec())
 
 
 if __name__ == "__main__":
+    write_log("__main__ block reached")
     main()

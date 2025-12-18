@@ -460,50 +460,76 @@ $Shortcut.Save()
 
     def launch_app_with_message(self):
         """起動メッセージを表示してからアプリを起動"""
-        messagebox.showinfo("起動", "アプリを起動します。")
-        self.launch_app()
+        self.log("アプリを起動します...", 'info')
+        self.update_status("アプリを起動中...")
+        self.root.update()
+        self.root.after(500, self.launch_app)
 
     def launch_app(self):
         """メインアプリを起動"""
+        log_path = os.path.join(APP_DIR, 'launch.log')
+
         try:
-            # セットアップ完了フラグを作成
-            try:
+            # ログファイルに記録開始
+            with open(log_path, 'w', encoding='utf-8') as log:
+                log.write(f"=== Launch Log ===\n")
+                log.write(f"APP_DIR: {APP_DIR}\n")
+                log.write(f"sys.executable: {sys.executable}\n")
+
+                # セットアップ完了フラグを作成
                 with open(SETUP_COMPLETE_FLAG, 'w') as f:
                     f.write('setup complete')
-            except:
-                pass
+                log.write("SETUP_COMPLETE_FLAG created\n")
 
-            main_script = os.path.join(APP_DIR, 'main.py')
+                main_script = os.path.join(APP_DIR, 'main.py')
+                log.write(f"main_script: {main_script}\n")
+                log.write(f"main_script exists: {os.path.exists(main_script)}\n")
 
-            if not os.path.exists(main_script):
-                self.show_error(f"main.pyが見つかりません:\n{main_script}")
-                return
+                if not os.path.exists(main_script):
+                    log.write("ERROR: main.py not found\n")
+                    self.show_error(f"main.pyが見つかりません:\n{main_script}")
+                    return
 
-            # python.exeで直接起動（エラーが見えるように）
-            # GUIアプリなので、Popenで起動してすぐランチャーを閉じる
-            process = subprocess.Popen(
-                [sys.executable, main_script],
-                cwd=APP_DIR,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-            )
+                # pythonw.exeを使用（GUIアプリ用）
+                pythonw = sys.executable
+                if 'python.exe' in pythonw.lower():
+                    pythonw = pythonw.replace('python.exe', 'pythonw.exe')
+                    pythonw = pythonw.replace('Python.exe', 'pythonw.exe')
 
-            # 少し待ってエラーチェック
-            import time
-            time.sleep(2)
+                if not os.path.exists(pythonw):
+                    pythonw = sys.executable
 
-            # プロセスが終了していたらエラー
-            if process.poll() is not None:
-                stderr = process.stderr.read().decode('utf-8', errors='ignore') if process.stderr else ''
-                if stderr:
-                    self.show_error(f"起動エラー:\n{stderr[:500]}")
-                else:
-                    self.show_error("アプリが起動直後に終了しました。")
-                return
+                log.write(f"Using Python: {pythonw}\n")
+                log.write(f"Python exists: {os.path.exists(pythonw)}\n")
 
+                # 起動コマンド
+                cmd = [pythonw, main_script]
+                log.write(f"Command: {cmd}\n")
+                log.write("Starting process...\n")
+                log.flush()
+
+                # シンプルにPopenで起動（エラー捕捉なし）
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=APP_DIR,
+                    # 標準出力/エラーは捕捉しない（バッファリング問題回避）
+                )
+
+                log.write(f"Process started with PID: {process.pid}\n")
+                log.write("Launcher closing...\n")
+
+            # ランチャーを閉じる
             self.root.quit()
 
         except Exception as e:
+            # エラーをログに記録
+            try:
+                with open(log_path, 'a', encoding='utf-8') as log:
+                    log.write(f"ERROR: {str(e)}\n")
+                    import traceback
+                    log.write(traceback.format_exc())
+            except:
+                pass
             self.show_error(f"アプリの起動に失敗しました:\n{str(e)}")
 
     def show_error(self, message):
