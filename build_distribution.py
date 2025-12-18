@@ -18,6 +18,7 @@ INCLUDE_FILES = [
     'main.py',
     'launcher.pyw',
     'YouTubeDownloader.vbs',
+    'CreateShortcut.vbs',
     'requirements.txt',
     'README.txt',
 ]
