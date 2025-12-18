@@ -47,16 +47,17 @@ DESKTOP_SHORTCUT = os.path.join(os.path.expanduser("~"), "Desktop", "YouTube Dow
 class LauncherApp:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("YouTube Downloader")
+        self.root.title("YouTube Downloader - セットアップ")
         self.root.geometry("550x420")
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)  # 最小化可能に
+        self.root.minsize(450, 350)
 
         # アイコン設定
         icon_path = os.path.join(APP_DIR, "icon.ico")
         if os.path.exists(icon_path):
             self.root.iconbitmap(icon_path)
 
-        # ウィンドウを中央に配置
+        # ウィンドウを中央に配置（最前面強制しない）
         self.center_window()
 
         # 状態管理
@@ -136,7 +137,7 @@ class LauncherApp:
         # FFmpegダウンロードボタン（初期は非表示）
         self.ffmpeg_btn = ttk.Button(
             self.button_frame,
-            text="FFmpegをダウンロード（約180MB）",
+            text="FFmpegをダウンロード",
             command=self.start_ffmpeg_download
         )
 
@@ -282,8 +283,8 @@ class LauncherApp:
 
     def should_ask_shortcut(self):
         """ショートカット作成を確認すべきか判定"""
-        # ショートカットが存在しない＆まだ確認していない場合のみ
-        return not os.path.exists(DESKTOP_SHORTCUT) and not os.path.exists(SHORTCUT_OFFERED_FLAG)
+        # ショートカットが存在しない＆初回セットアップの場合
+        return not os.path.exists(DESKTOP_SHORTCUT) and self.is_first_run
 
     def show_result(self):
         """チェック結果を表示してボタンを更新"""
@@ -291,12 +292,12 @@ class LauncherApp:
             self.log("=== 全ての準備が完了しました ===", 'ok')
             self.update_status("準備完了！")
 
-            # ショートカットが存在しない場合は確認
+            # 初回かつショートカットが存在しない場合は確認
             if self.should_ask_shortcut():
                 self.root.after(500, self.ask_desktop_shortcut)
             else:
                 # 自動起動
-                self.root.after(1000, self.launch_app)
+                self.root.after(500, self.launch_app_with_message)
 
         elif self.packages_ok and not self.ffmpeg_ok:
             self.log("=== FFmpegのセットアップが必要です ===", 'info')
@@ -391,21 +392,14 @@ class LauncherApp:
         self.ffmpeg_btn.pack_forget()
         self.launch_btn.config(text="アプリを起動", state=tk.NORMAL)
 
-        # ショートカットが存在しない場合は確認
+        # 初回かつショートカットが存在しない場合は確認
         if self.should_ask_shortcut():
             self.root.after(500, self.ask_desktop_shortcut)
         else:
-            self.root.after(1000, self.launch_app)
+            self.root.after(500, self.launch_app_with_message)
 
     def ask_desktop_shortcut(self):
         """デスクトップショートカット作成を確認"""
-        # 確認済みフラグを作成（再度聞かないように）
-        try:
-            with open(SHORTCUT_OFFERED_FLAG, 'w') as f:
-                f.write('offered')
-        except:
-            pass
-
         result = messagebox.askyesno(
             "セットアップ完了",
             "デスクトップにショートカットを作成しますか？\n\n"
@@ -422,7 +416,7 @@ class LauncherApp:
         except:
             pass
 
-        self.launch_app()
+        self.launch_app_with_message()
 
     def create_desktop_shortcut(self):
         """デスクトップショートカットを作成"""
@@ -463,6 +457,11 @@ $Shortcut.Save()
 
         except Exception as e:
             self.log(f"ショートカット作成に失敗: {e}", 'error')
+
+    def launch_app_with_message(self):
+        """起動メッセージを表示してからアプリを起動"""
+        messagebox.showinfo("起動", "アプリを起動します。")
+        self.launch_app()
 
     def launch_app(self):
         """メインアプリを起動"""
