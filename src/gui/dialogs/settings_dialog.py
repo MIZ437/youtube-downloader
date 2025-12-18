@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QSettings
 
 from src.gui.utils import style_combobox
+from src.constants import MAX_CUSTOM_VOCABULARY_CHARS, CUSTOM_VOCABULARY_WARNING_THRESHOLD
 
 
 class SettingsDialog(QDialog):
@@ -129,10 +130,16 @@ class SettingsDialog(QDialog):
             "例: YouTube、ダウンローダー、Whisper、yt-dlp"
         )
         self.custom_vocabulary_edit.setMaximumHeight(80)
+        self.custom_vocabulary_edit.textChanged.connect(self.on_vocabulary_changed)
         accuracy_layout.addRow(self.custom_vocabulary_edit)
 
+        # 文字数カウントラベル
+        self.vocab_count_label = QLabel(f"0/{MAX_CUSTOM_VOCABULARY_CHARS}文字")
+        self.vocab_count_label.setStyleSheet("color: gray; font-size: 11px;")
+        accuracy_layout.addRow(self.vocab_count_label)
+
         # 説明ラベル
-        vocab_note = QLabel("※この設定は保存され、毎回自動で適用されます（最大100〜150文字程度が効果的）")
+        vocab_note = QLabel(f"※この設定は保存され、毎回自動で適用されます（{MAX_CUSTOM_VOCABULARY_CHARS}文字以内が効果的）")
         vocab_note.setStyleSheet("color: gray; font-size: 11px;")
         accuracy_layout.addRow(vocab_note)
 
@@ -165,6 +172,22 @@ class SettingsDialog(QDialog):
             self.whisper_model_combo.setToolTip("")
             self.whisper_model_combo.setStyleSheet("")
 
+    def on_vocabulary_changed(self):
+        """カスタム辞書の文字数変更時"""
+        text = self.custom_vocabulary_edit.toPlainText()
+        char_count = len(text)
+
+        # 文字数に応じて色を変更
+        if char_count > MAX_CUSTOM_VOCABULARY_CHARS:
+            color = "#d83b01"  # 超過: 赤
+        elif char_count > CUSTOM_VOCABULARY_WARNING_THRESHOLD:
+            color = "#ca5010"  # 警告: オレンジ
+        else:
+            color = "gray"  # 正常
+
+        self.vocab_count_label.setText(f"{char_count}/{MAX_CUSTOM_VOCABULARY_CHARS}文字")
+        self.vocab_count_label.setStyleSheet(f"color: {color}; font-size: 11px;")
+
     def load_settings(self):
         settings = QSettings("YTDownloader", "Settings")
         self.output_dir_edit.setText(settings.value("output_dir", os.path.expanduser("~/Downloads")))
@@ -179,6 +202,7 @@ class SettingsDialog(QDialog):
         self.whisper_engine_combo.setCurrentIndex(engine_idx)
         self.on_engine_changed(engine_idx)  # UIの状態を更新
         self.custom_vocabulary_edit.setPlainText(settings.value("custom_vocabulary", "", type=str))
+        self.on_vocabulary_changed()  # 文字数カウントを更新
 
     def save_settings(self):
         settings = QSettings("YTDownloader", "Settings")

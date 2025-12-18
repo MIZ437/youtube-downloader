@@ -26,12 +26,13 @@ from src.constants import (
 logger = logging.getLogger(__name__)
 
 
-def sanitize_filename(filename: str) -> str:
+def sanitize_filename(filename: str, max_length: int = 200) -> str:
     """
     ファイル名から危険な文字を除去（パストラバーサル対策）
 
     Args:
         filename: 元のファイル名
+        max_length: 最大ファイル名長（デフォルト200、Windowsは255まで、拡張子分を考慮）
 
     Returns:
         サニタイズされたファイル名
@@ -39,13 +40,12 @@ def sanitize_filename(filename: str) -> str:
     # パストラバーサル防止: ディレクトリ部分を除去
     filename = os.path.basename(filename)
 
-    # 危険な文字を置換
-    for char in INVALID_FILENAME_CHARS:
-        filename = filename.replace(char, '_')
+    # 危険な文字を一括置換（効率化）
+    trans_table = str.maketrans(INVALID_FILENAME_CHARS, '_' * len(INVALID_FILENAME_CHARS))
+    filename = filename.translate(trans_table)
 
-    # 連続するアンダースコアを1つに
-    while '__' in filename:
-        filename = filename.replace('__', '_')
+    # 連続するアンダースコアを1つに（正規表現で効率化）
+    filename = re.sub(r'_+', '_', filename)
 
     # 先頭・末尾のアンダースコアとスペースを除去
     filename = filename.strip('_ ')
@@ -53,6 +53,14 @@ def sanitize_filename(filename: str) -> str:
     # 空になった場合はデフォルト名
     if not filename:
         filename = 'download'
+
+    # ファイル名長制限（Windows対応）
+    if len(filename) > max_length:
+        # 拡張子を保持しつつ切り詰め
+        name, ext = os.path.splitext(filename)
+        max_name_len = max_length - len(ext)
+        filename = name[:max_name_len] + ext
+        logger.debug(f"Filename truncated to {len(filename)} chars")
 
     logger.debug(f"Sanitized filename: {filename}")
     return filename
@@ -313,7 +321,8 @@ class YouTubeDownloader:
 
                     if self._passes_filter(video_info, filter_options):
                         videos.append(video_info)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"Failed to get video info for {entry.get('id', 'unknown')}: {e}")
                     continue
 
         return videos

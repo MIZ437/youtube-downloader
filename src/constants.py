@@ -11,6 +11,12 @@ BYTES_PER_SECOND = AUDIO_BITRATE_KBPS * 1024 // 8  # 約16KB/秒
 DOWNLOAD_TIMEOUT_SECONDS = 3600  # ダウンロードタイムアウト (1時間)
 THREAD_WAIT_TIMEOUT_MS = 5000  # スレッド待機タイムアウト (5秒)
 MAX_RETRIES = 3  # 最大リトライ回数
+URL_FETCH_TIMEOUT_SECONDS = 30  # URL取得タイムアウト（秒）
+GPU_DETECT_TIMEOUT_SECONDS = 10  # GPU検出タイムアウト（秒）
+
+# カスタム辞書設定
+MAX_CUSTOM_VOCABULARY_CHARS = 150  # カスタム辞書の最大文字数（推奨）
+CUSTOM_VOCABULARY_WARNING_THRESHOLD = 100  # 警告を表示する文字数
 
 # =============================================================================
 # FFmpeg設定

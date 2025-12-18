@@ -357,8 +357,9 @@ class SpacesTab(QWidget):
                     try:
                         os.remove(os.path.join(directory, f))
                         deleted += 1
-                    except Exception:
-                        pass
+                    except OSError as e:
+                        # ファイル削除失敗をログに記録（使用中など）
+                        print(f"[警告] .partファイル削除失敗: {f} - {e}")
         return deleted
 
     def on_spaces_progress(self, info):

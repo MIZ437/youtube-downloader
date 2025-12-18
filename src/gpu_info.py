@@ -8,7 +8,7 @@ import logging
 from typing import Optional, Tuple
 from dataclasses import dataclass
 
-from src.constants import WHISPER_VRAM_REQUIREMENTS
+from src.constants import WHISPER_VRAM_REQUIREMENTS, GPU_DETECT_TIMEOUT_SECONDS
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -89,12 +89,14 @@ class GPUInfo:
 
 
 def detect_gpu() -> GPUInfo:
-    """GPUを検出"""
+    """GPUを検出（タイムアウト付き）"""
     logger.info("Detecting GPU...")
 
-    # まずPyTorchで確認を試みる
+    # まずPyTorchで確認を試みる（タイムアウト付きでサブプロセスで実行）
     try:
         import torch
+        # torch.cuda.is_available()は通常高速だが、ドライバ問題時にハングする可能性あり
+        # 直接呼び出しで問題ない場合が多いので、まず試す
         if torch.cuda.is_available():
             name = torch.cuda.get_device_name(0)
             vram = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
@@ -109,12 +111,13 @@ def detect_gpu() -> GPUInfo:
     except Exception as e:
         logger.warning(f"PyTorch GPU detection error: {e}")
 
-    # PyTorchが使えない場合はnvidia-smiを試す
+    # PyTorchが使えない場合はnvidia-smiを試す（タイムアウト付き）
     try:
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
+            timeout=GPU_DETECT_TIMEOUT_SECONDS,
             creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
         )
         if result.returncode == 0:
@@ -128,6 +131,8 @@ def detect_gpu() -> GPUInfo:
                     return GPUInfo(available=True, name=name, vram_mb=vram)
         else:
             logger.debug(f"nvidia-smi failed with code {result.returncode}")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"nvidia-smi timed out after {GPU_DETECT_TIMEOUT_SECONDS}s")
     except FileNotFoundError:
         logger.debug("nvidia-smi not found")
     except Exception as e:

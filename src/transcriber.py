@@ -13,7 +13,10 @@ from typing import Callable, Optional, List, Dict, Any
 from dataclasses import dataclass
 import yt_dlp
 
-from src.constants import ERROR_MESSAGES, WHISPER_MODELS, KOTOBA_WHISPER_MODEL
+from src.constants import (
+    ERROR_MESSAGES, WHISPER_MODELS, KOTOBA_WHISPER_MODEL,
+    URL_FETCH_TIMEOUT_SECONDS
+)
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -70,7 +73,8 @@ class TranscriptResult:
             lines.append(f"{start} --> {end}")
             lines.append(seg.text)
             lines.append("")
-        return '\n'.join(lines)
+        # 末尾の余分な空行を除去
+        return '\n'.join(lines).rstrip() + '\n'
 
     def to_txt(self) -> str:
         """タイムスタンプ付きテキストに変換"""
@@ -106,6 +110,7 @@ class Transcriber:
         self._progress_callback: Optional[Callable[[Dict], None]] = None
         self._cancel_flag = False
         self._cancel_lock = threading.Lock()  # スレッドセーフなキャンセル制御
+        self._model_load_lock = threading.Lock()  # モデルロードの競合対策
         logger.info("Transcriber initialized")
 
     def set_engine(self, engine: str):
@@ -155,26 +160,28 @@ class Transcriber:
 
     def load_whisper_model(self, model_name: str = 'base'):
         """Whisperモデルを読み込み（エンジンに応じて適切なモデルをロード）"""
-        # kotoba-whisperを使う場合
-        if self._use_kotoba:
-            self._load_kotoba_model()
-            return
+        # モデルロードの競合を防止
+        with self._model_load_lock:
+            # kotoba-whisperを使う場合
+            if self._use_kotoba:
+                self._load_kotoba_model()
+                return
 
-        # faster-whisperを使う場合
-        if self._engine == 'faster-whisper':
-            self._load_faster_whisper_model(model_name)
-            return
+            # faster-whisperを使う場合
+            if self._engine == 'faster-whisper':
+                self._load_faster_whisper_model(model_name)
+                return
 
-        # 標準openai-whisperを使う場合
-        if self._whisper_model is None or self._model_name != model_name:
-            self._report_progress('loading', 0, f'Whisperモデル({model_name})を読み込み中...')
-            try:
-                import whisper
-                self._whisper_model = whisper.load_model(model_name)
-                self._model_name = model_name
-                self._report_progress('loaded', 100, 'モデル読み込み完了')
-            except Exception as e:
-                raise Exception(f"Whisperモデルの読み込みに失敗: {str(e)}")
+            # 標準openai-whisperを使う場合
+            if self._whisper_model is None or self._model_name != model_name:
+                self._report_progress('loading', 0, f'Whisperモデル({model_name})を読み込み中...')
+                try:
+                    import whisper
+                    self._whisper_model = whisper.load_model(model_name)
+                    self._model_name = model_name
+                    self._report_progress('loaded', 100, 'モデル読み込み完了')
+                except Exception as e:
+                    raise Exception(f"Whisperモデルの読み込みに失敗: {str(e)}")
 
     def _load_faster_whisper_model(self, model_name: str = 'base'):
         """faster-whisperモデルを読み込み"""
@@ -289,9 +296,9 @@ class Transcriber:
                 if not subtitle_url:
                     return None
 
-                # 字幕をダウンロードしてパース
+                # 字幕をダウンロードしてパース（タイムアウト付き）
                 import urllib.request
-                with urllib.request.urlopen(subtitle_url) as response:
+                with urllib.request.urlopen(subtitle_url, timeout=URL_FETCH_TIMEOUT_SECONDS) as response:
                     subtitle_content = response.read().decode('utf-8')
 
                 segments = self._parse_subtitle(subtitle_content, subtitle_ext)

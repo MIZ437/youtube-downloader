@@ -7,11 +7,13 @@ from typing import Optional
 
 from PyQt6.QtWidgets import QComboBox, QListView
 
-# 定数
-AUDIO_BITRATE_KBPS = 128  # 想定音声ビットレート (kbps)
-BYTES_PER_SECOND = AUDIO_BITRATE_KBPS * 1024 // 8  # 約16KB/秒
-DOWNLOAD_TIMEOUT_SECONDS = 3600  # ダウンロードタイムアウト (1時間)
-THREAD_WAIT_TIMEOUT_MS = 5000  # スレッド待機タイムアウト (5秒)
+# 定数は constants.py から一元管理（重複を解消）
+from src.constants import (
+    AUDIO_BITRATE_KBPS,
+    BYTES_PER_SECOND,
+    DOWNLOAD_TIMEOUT_SECONDS,
+    THREAD_WAIT_TIMEOUT_MS,
+)
 
 
 def format_eta(seconds: Optional[int]) -> str:
