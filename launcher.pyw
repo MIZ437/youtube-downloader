@@ -35,6 +35,9 @@ REQUIRED_PACKAGES = [
 # 初回セットアップ完了フラグファイル
 SETUP_COMPLETE_FLAG = os.path.join(APP_DIR, '.setup_complete')
 
+# デスクトップショートカットのパス
+DESKTOP_SHORTCUT = os.path.join(os.path.expanduser("~"), "Desktop", "YouTube Downloader.lnk")
+
 
 class LauncherApp:
     def __init__(self):
@@ -51,8 +54,8 @@ class LauncherApp:
         # ウィンドウを中央に配置
         self.center_window()
 
-        # 状態管理
-        self.is_first_run = not os.path.exists(SETUP_COMPLETE_FLAG)
+        # 状態管理: フラグファイルまたはショートカットが存在すれば初回ではない
+        self.is_first_run = not (os.path.exists(SETUP_COMPLETE_FLAG) or os.path.exists(DESKTOP_SHORTCUT))
         self.needs_install = False
 
         # UI構築
