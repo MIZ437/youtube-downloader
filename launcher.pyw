@@ -12,6 +12,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import importlib.util
 
+# Windows: タスクバーアイコン用にAppUserModelIDを設定
+if sys.platform == 'win32':
+    import ctypes
+    myappid = 'YTDownloader.YouTubeDownloader.1.0'
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
 # アプリケーションのルートディレクトリ
 if getattr(sys, 'frozen', False):
     APP_DIR = os.path.dirname(sys.executable)

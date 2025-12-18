@@ -16,6 +16,12 @@ else:
 
 sys.path.insert(0, app_path)
 
+# Windows: タスクバーアイコン用にAppUserModelIDを設定
+if sys.platform == 'win32':
+    import ctypes
+    myappid = 'YTDownloader.YouTubeDownloader.1.0'
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtCore import Qt, QLocale
 from PyQt6.QtGui import QFont, QIcon

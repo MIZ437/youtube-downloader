@@ -108,7 +108,16 @@ def extract_ffmpeg(zip_path: str, progress_callback: Optional[Callable[[str], No
         logger.error("ZIP file is corrupted")
         raise Exception(ERROR_MESSAGES['checksum_mismatch'])
 
-    # 既存のディレクトリを削除
+    # 既にffmpeg.exeが存在する場合はスキップ
+    ffmpeg_exe = os.path.join(ffmpeg_dir, "ffmpeg.exe")
+    if os.path.exists(ffmpeg_exe):
+        logger.info(f"FFmpeg already exists at: {ffmpeg_exe}, skipping extraction")
+        # ZIPファイルだけ削除
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+        return ffmpeg_dir
+
+    # 既存のディレクトリを削除（ffmpeg.exeがない場合のみ）
     if os.path.exists(ffmpeg_dir):
         logger.debug(f"Removing existing directory: {ffmpeg_dir}")
         shutil.rmtree(ffmpeg_dir)
@@ -161,8 +170,16 @@ def setup_ffmpeg(
     """FFmpegをセットアップ"""
     logger.info("Starting FFmpeg setup...")
 
+    # 二重チェック：既にインストール済みなら何もしない
     if is_ffmpeg_installed():
-        logger.info("FFmpeg already installed")
+        logger.info("FFmpeg already installed, skipping setup")
+        setup_ffmpeg_path()
+        return True
+
+    # ダウンロード前に再度チェック
+    ffmpeg_exe = os.path.join(get_ffmpeg_dir(), "ffmpeg.exe")
+    if os.path.exists(ffmpeg_exe):
+        logger.info(f"FFmpeg found at: {ffmpeg_exe}, skipping download")
         setup_ffmpeg_path()
         return True
 
